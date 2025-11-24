@@ -27,8 +27,8 @@ if archivo:
         }
 
         # ❗ CAMBIO CLAVE: el backend espera "archivo", NO "file"
-        file = {
-            "archivo": (archivo.name, archivo.getvalue(), archivo.type)
+        files = {
+            "file": (archivo.name, archivo.getvalue(), archivo.type)
         }
 
         response = requests.post(API_URL, data=data, files=files)
