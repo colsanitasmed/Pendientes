@@ -4,7 +4,7 @@ import datetime
 
 st.title("📄 Cargue de Documentos Pendientes")
 
-API_URL = "https://script.google.com/macros/s/AKfycbwCKSxDidCQw42KLBexjN_vWSCi7XaC982yKcG3O50z4AkUL8lno4tIGbvtvaxgsIzf/exec"
+API_URL = "https://script.google.com/macros/s/AKfycbzUenagKDuUQ2LvG6CDB46xtFRLZdIa4sHBLhrH63SnfxS-CBiPNUabp051oYYXEM0R/exec"
 
 
 archivo = st.file_uploader("Cargar Documento")
