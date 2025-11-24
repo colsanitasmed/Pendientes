@@ -26,9 +26,9 @@ if archivo:
             "filename": archivo.name
         }
 
-        # El archivo SE ENVÍA AQUÍ
+        # ❗ CAMBIO CLAVE: el backend espera "archivo", NO "file"
         files = {
-            "file": (archivo.name, archivo.getvalue(), archivo.type)
+            "archivo": (archivo.name, archivo.getvalue(), archivo.type)
         }
 
         response = requests.post(API_URL, data=data, files=files)
@@ -38,4 +38,3 @@ if archivo:
         except:
             st.error("La API devolvió algo que no es JSON")
             st.write(response.text)
-
