@@ -4,7 +4,7 @@ import base64
 
 st.title("📄 Cargue de Documentos Pendientes")
 
-API_URL = "TU_URL_DEL_WEBAPP"   # <-- reemplazar por la URL del despliegue
+API_URL = "https://script.google.com/macros/s/AKfycbweOuq4IBBS58cemM_H35zc7sUnz0bVQPnlggK18eziLppYejiY15hU8sjG1cYighEN/exec"   # <-- reemplazar por la URL del despliegue
 
 # 1. Tipo de documento
 tipo = st.selectbox("Tipo de Documento", ["PDF", "JPG", "PNG", "Otros"])
