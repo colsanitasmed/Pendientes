@@ -6,9 +6,9 @@ st.title("📄 Cargue de Documentos Pendientes")
 
 API_URL = "https://script.google.com/macros/s/AKfycbyFrx2LzOsFvNfUOeHGI7uoOq783tT22PHYkv5Uajw1pQ79iLQo0DJWVv-2ESmMZoF5/exec"
 
-file = st.file_uploader("Cargar Documento")
+archivo = st.file_uploader("Cargar Documento")
 
-if file:
+if archivo:
     st.success("Archivo listo para procesar")
 
     if st.button("Enviar"):
