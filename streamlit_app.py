@@ -1,5 +1,4 @@
 import streamlit as st
-import base64
 import requests
 import datetime
 
@@ -7,28 +6,36 @@ st.title("📄 Cargue de Documentos Pendientes")
 
 API_URL = "https://script.google.com/macros/s/AKfycbxuIXotPuk3-IZaVCi7RjN7mGkB-_apsrefyzPvsU1xSCrWNC7iQzhYFPEnvXdiM2q6/exec"
 
-archivo = st.file_uploader("Cargar Documento", type=None)
+archivo = st.file_uploader("Cargar Documento")
 
-if archivo is not None:
+if archivo:
     st.success("Archivo listo para procesar")
 
     if st.button("Enviar"):
-        base64_file = base64.b64encode(archivo.getvalue()).decode()
-
+        
+        # Datos adicionales
         data = {
-            "nombre_archivo": archivo.name,
-            "mime": archivo.type,
-            "base64": base64_file,
-
             "FechaCarga": str(datetime.date.today()),
             "DocumentoPaciente": "",
+            "NumeroSolicitud": "",
+            "PedidoPendiente": "",
+            "Codigo": "",
+            "Descripcion": "",
+            "Unid": "",
+            "Cant": "",
+            "filename": archivo.name
         }
 
-        response = requests.post(API_URL, json=data)
+        # El archivo SE ENVÍA AQUÍ
+        files = {
+            "file": (archivo.name, archivo.getvalue(), archivo.type)
+        }
+
+        response = requests.post(API_URL, data=data, files=files)
 
         try:
-            resultado = response.json()
-            st.json(resultado)
+            st.json(response.json())
         except:
             st.error("La API devolvió algo que no es JSON")
             st.write(response.text)
+
