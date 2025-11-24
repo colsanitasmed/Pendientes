@@ -1,0 +1,4 @@
+streamlit
+PyDrive3
+requests
+oauth2client
