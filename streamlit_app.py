@@ -6,84 +6,97 @@ from PIL import Image
 import numpy as np
 
 # ===============================
-#  FUNCIÓN DE EXTRACCIÓN
+#  FUNCIÓN DE EXTRACCIÓN AVANZADA
 # ===============================
+
 def extraer_datos(texto):
 
-    # ----------------------------------------
-    # 1. Extraer número de solicitud y pedido
-    # ----------------------------------------
+    # Normalizar texto
+    lower = texto.lower()
+
+    # ----------------------------
+    # 1. Número de solicitud
+    # ----------------------------
     num_sol = None
+    m = re.search(r"n[uú]mero de solicitud\s*(\d+)", lower)
+    if m:
+        num_sol = m.group(1)
+
+    # ----------------------------
+    # 2. Pedido pendiente
+    # ----------------------------
     pedido = None
+    m = re.search(r"pedido pendiente\s*(\d+)", lower)
+    if m:
+        pedido = m.group(1)
 
-    sol_match = re.search(r"solicitud\s*(\d+)", texto.lower())
-    if sol_match:
-        num_sol = sol_match.group(1)
+    lineas = [l.strip() for l in texto.split("\n") if l.strip()]
 
-    ped_match = re.search(r"pendiente\s*(\d+)", texto.lower())
-    if ped_match:
-        pedido = ped_match.group(1)
-
-    # ----------------------------------------
-    # 2. Separar líneas limpias
-    # ----------------------------------------
-    lineas = [l.strip() for l in texto.split("\n") if l.strip() != ""]
-
-    # ----------------------------------------
-    # 3. Detectar código (primer número de 5–6 dígitos)
-    # ----------------------------------------
+    # ----------------------------
+    # 3. Buscar “Cod.” y extraer el código correcto
+    # ----------------------------
     codigo = None
-    for linea in lineas:
-        cod_match = re.search(r"\b(\d{5,6})\b", linea)
-        if cod_match:
-            codigo = cod_match.group(1)
+    indice_cod = None
+
+    for i, l in enumerate(lineas):
+        if re.search(r"^cod[\.]?$", l.lower()):
+            indice_cod = i
             break
 
-    # ----------------------------------------
-    # 4. Detectar unidad posible
-    # ----------------------------------------
-    posibles_unidades = ["FCO", "Fco", "TAB", "CAPS", "AMP", "ML", "G", "UND", "UNID"]
+    if indice_cod is not None:
+        for j in range(indice_cod, min(indice_cod + 5, len(lineas))):
+            match = re.search(r"\b(\d{5,6})\b", lineas[j])
+            if match:
+                codigo = match.group(1)
+                break
+
+    # ----------------------------
+    # 4. Buscar "Unid." y luego la unidad real
+    # ----------------------------
+    posibles_unidades = ["FCO", "Fco", "Tab", "CAP", "Amp", "ml", "ML", "G"]
 
     unidad = None
-    for linea in lineas:
-        if any(linea.upper().startswith(u.upper()) for u in posibles_unidades):
-            unidad = linea
+    indice_unid = None
+
+    for i, l in enumerate(lineas):
+        if re.search(r"^unid[\.]?$", l.lower()):
+            indice_unid = i
             break
 
-    # ----------------------------------------
-    # 5. Detectar cantidad (una línea que sea solo un número)
-    # ----------------------------------------
+    if indice_unid is not None:
+        for j in range(indice_unid + 1, min(indice_unid + 5, len(lineas))):
+            if any(u.lower() in lineas[j].lower().split() for u in posibles_unidades):
+                unidad = lineas[j]
+                break
+
+    # ----------------------------
+    # 5. Buscar “Cant” y luego la cantidad real
+    # ----------------------------
     cantidad = None
-    for linea in lineas:
-        if re.fullmatch(r"\d+", linea):
-            cantidad = linea
+    indice_cant = None
+
+    for i, l in enumerate(lineas):
+        if re.search(r"^cant[\.]?$", l.lower()):
+            indice_cant = i
             break
 
-    # ----------------------------------------
-    # 6. Descripción (todo menos código/unidad/cantidad)
-    # ----------------------------------------
-    descripcion_partes = []
-    for linea in lineas:
-        l = linea
+    if indice_cant is not None:
+        for j in range(indice_cant + 1, min(indice_cant + 4, len(lineas))):
+            if re.fullmatch(r"\d{1,3}", lineas[j]):
+                cantidad = lineas[j]
+                break
 
-        if codigo and codigo in l:
-            l = l.replace(codigo, "").strip()
+    # ----------------------------
+    # 6. Descripción = líneas entre código y unidad
+    # ----------------------------
+    descripcion = None
+    if codigo and unidad:
+        idx_codigo = next((i for i, l in enumerate(lineas) if codigo in l), None)
+        idx_unidad = next((i for i, l in enumerate(lineas) if unidad in l), None)
 
-        if cantidad and l == cantidad:
-            continue
-
-        if unidad and l == unidad:
-            continue
-
-        if "Cod" in l or "Descripcion" in l or "Unid" in l:
-            continue
-
-        if re.search(r"[A-Za-z]", l):
-            descripcion_partes.append(l)
-
-    descripcion = " ".join(descripcion_partes).strip()
-    if descripcion == "":
-        descripcion = None
+        if idx_codigo is not None and idx_unidad is not None and idx_unidad > idx_codigo:
+            desc_partes = lineas[idx_codigo+1 : idx_unidad]
+            descripcion = " ".join(desc_partes).strip()
 
     return {
         "numero_solicitud": num_sol,
@@ -91,31 +104,26 @@ def extraer_datos(texto):
         "codigo": codigo,
         "descripcion": descripcion,
         "unidad": unidad,
-        "cantidad": cantidad
+        "cantidad": cantidad,
     }
 
 
 # ===============================
-#  CONFIG STREAMLIT UI
+#  STREAMLIT APP
 # ===============================
 
 st.title("📸 OCR Automático para Pendientes")
 
-uploaded = st.file_uploader("Carga la imagen del ticket:", type=["png", "jpg", "jpeg"])
+file = st.file_uploader("Carga la imagen del ticket", type=["png", "jpg", "jpeg"])
 
-if uploaded:
-    image = Image.open(uploaded)
+if file:
+    image = Image.open(file)
     st.image(image, caption="Imagen cargada", use_column_width=True)
 
-    # Convertir imagen a formato para easyocr
-    img_np = np.array(image)
-
-    st.write("🔍 Ejecutando OCR...")
-
+    # OCR
     reader = easyocr.Reader(["es"], gpu=False)
-    result = reader.readtext(img_np, detail=0)
-
-    texto = "\n".join(result)
+    ocr_result = reader.readtext(np.array(image), detail=0)
+    texto = "\n".join(ocr_result)
 
     st.subheader("📝 Texto detectado:")
     st.text(texto)
@@ -124,19 +132,9 @@ if uploaded:
     datos = extraer_datos(texto)
 
     st.subheader("📌 Datos extraídos:")
-    st.write(f"**Número Solicitud:** {datos['numero_solicitud']}")
-    st.write(f"**Pedido Pendiente:** {datos['pedido_pendiente']}")
-    st.write(f"**Código:** {datos['codigo']}")
-    st.write(f"**Descripción:** {datos['descripcion']}")
-    st.write(f"**Unidad:** {datos['unidad']}")
-    st.write(f"**Cantidad:** {datos['cantidad']}")
+    st.write(datos)
 
-    st.write("———")
-
-    # ===============================
-    #  ENVIAR A GOOGLE FORM
-    # ===============================
-
+    # ENVIAR A GOOGLE FORM
     if st.button("📤 Enviar al Formulario"):
         url = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
@@ -152,6 +150,6 @@ if uploaded:
         r = requests.post(url, data=payload)
 
         if r.status_code == 200:
-            st.success("✅ Datos enviados correctamente")
+            st.success("Datos enviados correctamente")
         else:
-            st.error(f"❌ Error al enviar: {r.status_code}")
+            st.error(f"Error al enviar ({r.status_code})")
