@@ -50,13 +50,13 @@ if archivo:
     cantidad = cantidad.group(1) if cantidad else ""
 
     # Mostrar datos detectados
-    st.subheader("📌 Datos extraídos:")
-    st.write("Número de solicitud:", numero_sol)
-    st.write("Pedido pendiente:", pedido_pend)
-    st.write("Código:", codigo)
-    st.write("Descripción:", descripcion)
-    st.write("Unidad:", unidad)
-    st.write("Cantidad:", cantidad)
+   st.subheader("📌 Verificación de OCR")
+st.write("Numero Solicitud:", numero_solicitud)
+st.write("Pedido Pendiente:", pedido_pendiente)
+st.write("Código:", codigo)
+st.write("Descripción:", descripcion)
+st.write("Unidad:", unidad)
+st.write("Cantidad:", cantidad)
 
     # === ENVÍO A GOOGLE SHEETS ===
     if st.button("Enviar a Google Sheets"):
