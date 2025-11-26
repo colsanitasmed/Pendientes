@@ -1,6 +1,7 @@
 streamlit
-pytesseract
-Pillow
+easyocr
+pillow
+numpy
 requests
 PyDrive3
 oauth2client
