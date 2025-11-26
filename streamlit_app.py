@@ -1,123 +1,76 @@
 import streamlit as st
-import easyocr
+import pytesseract
 from PIL import Image
-import numpy as np
-import requests
 import re
+import io
 
-st.title("📄 Cargue Automático de Documentos Pendientes")
+st.title("🔍 Lector OCR Pendientes")
 
-# ============================
-# CONFIG GOOGLE FORM
-# ============================
+# -------------------------
+# FUNCIONES
+# -------------------------
+def extract_data(text):
+    # Limpieza básica
+    t = text.replace("\n", " ").replace("  ", " ")
 
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
+    # 1️⃣ Número de Solicitud
+    solicitud = re.search(r"(solicitud|solicltud|solicitud)\s*[:\-]?\s*(\d{6,12})", t, re.IGNORECASE)
+    solicitud = solicitud.group(2) if solicitud else ""
 
-ENTRY_NUMERO_SOL = "entry.611673084"
-ENTRY_PEDIDO = "entry.1680720626"
-ENTRY_CODIGO = "entry.832344567"
-ENTRY_DESCRIP = "entry.1533087800"
-ENTRY_UNIDAD = "entry.728245219"
-ENTRY_CANT = "entry.231047139"
+    # 2️⃣ Pedido Pendiente
+    pedido = re.search(r"(pendiente|pedido pendiente)\s*[:\-]?\s*(\d{6,12})", t, re.IGNORECASE)
+    pedido = pedido.group(2) if pedido else ""
 
-# ============================
-#  OCR: Inicializar EasyOCR
-# ============================
+    # 3️⃣ Código (línea que inicia con números)
+    codigo = re.search(r"\b(\d{5,12})\b\s+[A-Z]", t)
+    codigo = codigo.group(1) if codigo else ""
 
-@st.cache_resource
-def load_reader():
-    return easyocr.Reader(['es'], gpu=False)
-
-reader = load_reader()
-
-# ============================
-#  FUNCIÓN PARA EXTRAER DATOS
-# ============================
-
-def extraer_texto(imagen):
-    """Devuelve todo el texto detectado por OCR en un solo string."""
-    texto = reader.readtext(imagen, detail=0, paragraph=True)
-    return "\n".join(texto)
-
-def buscar_patron(texto, patron, descripcion=""):
-    """Búsqueda segura por regex."""
-    m = re.search(patron, texto, re.MULTILINE)
-    if m:
-        return m.group(1).strip()
-    return ""
-
-def extraer_campos(texto):
-    """Extrae los campos basados en el formato de tu ticket"""
-
-    numero_sol = buscar_patron(texto, r"N[uú]mero de solicitud[: ]+(\d+)")
-    pedido_pend = buscar_patron(texto, r"Pedido pendiente[: ]+(\d+)")
-    codigo = buscar_patron(texto, r"Cod\.?\s*[: ]+(\d+)")
-    unidad = buscar_patron(texto, r"Unidad[: ]+([A-Za-z]+)")
-    cantidad = buscar_patron(texto, r"Cant\.?\s*[: ]+(\d+)")
+    # 4️⃣ Descripción (línea larga después del código)
     descripcion = ""
+    if codigo:
+        patron_desc = rf"{codigo}\s+([A-Z0-9].+?)\s+(Fco|Tab|Cap|Sol|Und)"
+        desc_match = re.search(patron_desc, t)
+        if desc_match:
+            descripcion = desc_match.group(1)
 
-    # La descripción casi siempre es la línea más larga
-    lineas = texto.split("\n")
-    if lineas:
-        descripcion = max(lineas, key=len).strip()
+    # 5️⃣ Unidad ("Fco", "Tab", "Cap", etc.)
+    unidad_match = re.search(r"\b(Fco|Tab|Cap|Sol|Und)\b", t)
+    unidad = unidad_match.group(1) if unidad_match else ""
 
-    return numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad
+    # 6️⃣ Cantidad (número que sigue a la unidad)
+    cantidad = ""
+    if unidad:
+        cant_match = re.search(rf"{unidad}\s+(\d{{1,3}})", t)
+        if cant_match:
+            cantidad = cant_match.group(1)
+
+    return solicitud, pedido, codigo, descripcion, unidad, cantidad
 
 
-# ============================
-#  SUBIR ARCHIVO
-# ============================
+# -------------------------
+# UI
+# -------------------------
+uploaded_file = st.file_uploader("📸 Sube la foto o PDF del pendiente", type=["png","jpg","jpeg"])
 
-archivo = st.file_uploader("Sube el archivo (imagen)", type=["png", "jpg", "jpeg"])
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Imagen cargada", use_column_width=True)
 
-if archivo:
-    st.image(archivo, caption="Documento cargado", use_column_width=True)
+    # OCR
+    raw_text = pytesseract.image_to_string(image)
 
-    imagen = Image.open(archivo)
-    imagen_np = np.array(imagen)
-
-    # EXTRAER TEXTO GENERAL
-    texto = extraer_texto(imagen_np)
-
+    # Mostrar OCR crudo
     st.subheader("📄 Texto detectado por OCR")
-    st.code(texto)
+    st.text(raw_text)
 
-    # EXTRAER CAMPOS
-    numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad = extraer_campos(texto)
+    # Extraer datos
+    numero_sol, pedido_pend, cod, des, unidad, cant = extract_data(raw_text)
 
     st.subheader("📌 Datos extraídos")
-    st.write("📌 Número Solicitud:", numero_sol)
-    st.write("📌 Pedido Pendiente:", pedido_pend)
-    st.write("📌 Código:", codigo)
-    st.write("📌 Descripción:", descripcion)
-    st.write("📌 Unidad:", unidad)
-    st.write("📌 Cantidad:", cantidad)
 
-    # ============================
-    #  BOTÓN PARA ENVIAR AL FORM
-    # ============================
-
-    if st.button("Enviar a Google Sheets"):
-
-        # Validación básica
-        if not any([numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad]):
-            st.error("⚠ No se detectaron datos. Revisa la imagen o mejora el OCR.")
-        else:
-            payload = {
-                ENTRY_NUMERO_SOL: numero_sol,
-                ENTRY_PEDIDO: pedido_pend,
-                ENTRY_CODIGO: codigo,
-                ENTRY_DESCRIP: descripcion,
-                ENTRY_UNIDAD: unidad,
-                ENTRY_CANT: cantidad
-            }
-
-            try:
-                resp = requests.post(FORM_URL, data=payload)
-                if resp.status_code == 200:
-                    st.success("✔ Datos enviados correctamente a Google Sheets.")
-                else:
-                    st.error(f"Error HTTP {resp.status_code}")
-                    st.code(resp.text[:1000])
-            except Exception as e:
-                st.error(f"Error al enviar: {e}")
+    st.write(f"**📌 Número Solicitud:** {numero_sol}")
+    st.write(f"**📌 Pedido Pendiente:** {pedido_pend}")
+    st.write(f"**📌 Código:** {cod}")
+    st.write(f"**📌 Descripción:** {des}")
+    st.write(f"**📌 Unidad:** {unidad}")
+    st.write(f"**📌 Cantidad:** {cant}")
