@@ -1,20 +1,24 @@
 import streamlit as st
 import requests
 import datetime
+import base64
 
 st.title("📄 Cargue de Documentos Pendientes")
 
-API_URL = "https://script.google.com/macros/s/AKfycbxIgqJETfCHAckG6oJ_A-WiPYjNC83oniDCV1CuKDwC4OmiMy1OMJzs8_lZU7IE1aIx/exec"
+API_URL = "https://script.google.com/macros/s/AKfycbxQSUoJWxwwkaRDKfbF22FNZ7cmE9_MGXb9kESnHeoLoV0Psc1yUwxpy40m8dfhJkRy/exec"
 
-
+# Subida de archivo
 archivo = st.file_uploader("Cargar Documento")
 
 if archivo:
     st.success("Archivo listo para procesar")
 
+    # Convertir archivo a Base64 (Apps Script sí recibe esto)
+    contenido_b64 = base64.b64encode(archivo.getvalue()).decode("utf-8")
+
     if st.button("Enviar"):
-        
-        # Datos adicionales
+
+        # Datos adicionales que enviamos a Google Apps Script
         data = {
             "FechaCarga": str(datetime.date.today()),
             "DocumentoPaciente": "",
@@ -24,16 +28,14 @@ if archivo:
             "Descripcion": "",
             "Unid": "",
             "Cant": "",
-            "filename": archivo.name
+            "filename": archivo.name,
+            "filedata": contenido_b64
         }
 
-        # ❗ CAMBIO CLAVE: el backend espera "archivo", NO "file"
-        files = {
-            "file": (archivo.name, archivo.getvalue(), archivo.type)
-        }
+        # Envío POST normal (NO MULTIPART)
+        response = requests.post(API_URL, data=data)
 
-        response = requests.post(API_URL, data=data, files=files)
-
+        # Mostrar respuesta del servidor
         try:
             st.json(response.json())
         except:
