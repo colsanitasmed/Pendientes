@@ -25,37 +25,37 @@ reader = get_reader()
 
 # Función para extraer texto y campos
 def extraer_campos(texto):
-    # Texto limpio
     t = texto.replace("\n", " ").replace("  ", " ")
 
-    numero_sol = re.search(r"(?:N[uú]mero de solicitud|Número de solicitud)[:\s\-]*([0-9]{6,12})", t, re.IGNORECASE)
+    # Número de solicitud
+    numero_sol = re.search(r"(?:N[uú]mero de solicitud|Número de solicitud)[\s:]*([0-9]{6,12})", t, re.IGNORECASE)
     numero_sol = numero_sol.group(1) if numero_sol else ""
 
-    pedido_pend = re.search(r"(?:Pedido pendiente)[:\s\-]*([0-9]{6,12})", t, re.IGNORECASE)
+    # Pedido pendiente
+    pedido_pend = re.search(r"(?:Pedido pendiente)[\s:]*([0-9]{6,12})", t, re.IGNORECASE)
     pedido_pend = pedido_pend.group(1) if pedido_pend else ""
 
-    codigo = re.search(r"\b([0-9]{4,7})\b", t)
-    codigo = codigo.group(1) if codigo else ""
+    # ============================
+    #   EXTRAER CÓDIGO REAL
+    # ============================
+    # Buscar sección "Cod." → código → descripción → unidad → cantidad
+    patron_bloque = r"Cod\.?\s+([0-9]{4,8})\s+(.+?)\s+(Fco|FCO|UND|Tab|CAP|Sol)\s+([0-9]{1,3})"
+    match = re.search(patron_bloque, t, re.IGNORECASE)
 
-    unidad = re.search(r"\b(Fco|FCO|UND|Tab|CAP|Sol)\b", t)
-    unidad = unidad.group(1) if unidad else ""
-
-    cantidad = re.search(r"(?:Cant\.?|Cantidad)[:\s\-]*([0-9]{1,4})", t, re.IGNORECASE)
-    cantidad = cantidad.group(1) if cantidad else ""
-
-    descripcion = ""
-    if codigo and unidad:
-        patron_desc = rf"{codigo}\s+(.+?)\s+{unidad}"
-        desc_match = re.search(patron_desc, t, re.IGNORECASE)
-        if desc_match:
-            descripcion = desc_match.group(1).strip()
-    if not descripcion:
-        # fallback: puede estar después de “Descripcion” palabra literal
-        desc2 = re.search(r"Descr[ií]pcion[:\s\-]*(.+?)\s+(?:Unid|Unidad)", t, re.IGNORECASE)
-        if desc2:
-            descripcion = desc2.group(1).strip()
+    if match:
+        codigo = match.group(1)
+        descripcion = match.group(2).strip()
+        unidad = match.group(3)
+        cantidad = match.group(4)
+    else:
+        # fallback: por si cambia el formulario
+        codigo = ""
+        descripcion = ""
+        unidad = ""
+        cantidad = ""
 
     return numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad
+
 
 # Subir archivo
 archivo = st.file_uploader("Sube la imagen del ticket", type=["png", "jpg", "jpeg"])
