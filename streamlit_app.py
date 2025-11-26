@@ -4,6 +4,11 @@ from PIL import Image
 import re
 import io
 
+import pytesseract
+
+# IMPORTANTE: ruta para Streamlit Cloud
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
 st.title("🔍 Lector OCR Pendientes")
 
 # -------------------------
