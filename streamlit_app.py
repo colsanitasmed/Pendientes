@@ -1,15 +1,17 @@
 import streamlit as st
-import requests
-from PIL import Image
 import easyocr
+from PIL import Image
 import numpy as np
+import requests
 import re
 
-# ---------- CONFIG ----------
-FORM_URL = (
-    "https://docs.google.com/forms/d/e/"
-    "1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
-)
+st.title("📄 Cargue Automático de Documentos Pendientes")
+
+# ============================
+# CONFIG GOOGLE FORM
+# ============================
+
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
 ENTRY_NUMERO_SOL = "entry.611673084"
 ENTRY_PEDIDO = "entry.1680720626"
@@ -18,96 +20,104 @@ ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
 
-st.set_page_config(page_title="Carga de Tickets", layout="centered")
+# ============================
+#  OCR: Inicializar EasyOCR
+# ============================
 
-st.title("📄 Cargar Ticket — Enviar a Google Sheets (Automático)")
-
-# Inicializar lector EasyOCR (puede tardar unos segundos la primera vez)
 @st.cache_resource
-def get_reader():
-    return easyocr.Reader(["es"], gpu=False)
+def load_reader():
+    return easyocr.Reader(['es'], gpu=False)
 
-reader = get_reader()
+reader = load_reader()
 
-# Subida
-archivo = st.file_uploader("Sube el ticket (PNG/JPG/JPEG)", type=["png", "jpg", "jpeg"])
+# ============================
+#  FUNCIÓN PARA EXTRAER DATOS
+# ============================
 
-if archivo is not None:
-    try:
-        image = Image.open(archivo).convert("RGB")
-    except Exception as e:
-        st.error("No se pudo abrir la imagen: " + str(e))
-        st.stop()
+def extraer_texto(imagen):
+    """Devuelve todo el texto detectado por OCR en un solo string."""
+    texto = reader.readtext(imagen, detail=0, paragraph=True)
+    return "\n".join(texto)
 
-    st.image(image, caption="Ticket cargado", use_column_width=True)
+def buscar_patron(texto, patron, descripcion=""):
+    """Búsqueda segura por regex."""
+    m = re.search(patron, texto, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return ""
 
-    with st.spinner("Ejecutando OCR..."):
-        # easyocr devuelve lista de textos detectados si detail=0
-        ocr_result = reader.readtext(np.array(image), detail=0)
-        texto = "\n".join(ocr_result)
+def extraer_campos(texto):
+    """Extrae los campos basados en el formato de tu ticket"""
 
-    st.subheader("📝 Texto detectado por OCR")
-    st.code(texto, language="")
+    numero_sol = buscar_patron(texto, r"N[uú]mero de solicitud[: ]+(\d+)")
+    pedido_pend = buscar_patron(texto, r"Pedido pendiente[: ]+(\d+)")
+    codigo = buscar_patron(texto, r"Cod\.?\s*[: ]+(\d+)")
+    unidad = buscar_patron(texto, r"Unidad[: ]+([A-Za-z]+)")
+    cantidad = buscar_patron(texto, r"Cant\.?\s*[: ]+(\d+)")
+    descripcion = ""
 
-    # ----------------- Extracción (ajustar si tu ticket tiene pequeñas variaciones) -----------------
-    # Buscamos patrones robustos (ignorando mayúsculas/minúsculas y espacios)
-    def buscar_regex(pattern, txt, flags=re.IGNORECASE):
-        m = re.search(pattern, txt, flags)
-        return m.group(1).strip() if m else ""
+    # La descripción casi siempre es la línea más larga
+    lineas = texto.split("\n")
+    if lineas:
+        descripcion = max(lineas, key=len).strip()
 
-    # Número de solicitud (buscamos números largos)
-    numero_sol = buscar_regex(r"(?:N[úu]mero de solicitud|Número de solicitud|Número Solicitud|No\. solicitud)[:\s\-]*([0-9]{6,})", texto)
-    if not numero_sol:
-        # fallback: si aparece una línea que solo contiene el número y ya lo vimos en tus ejemplos
-        numero_sol = buscar_regex(r"(^|\n)\s*([0-9]{6,})\s*($|\n)", texto)
+    return numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad
 
-    pedido_pend = buscar_regex(r"(?:Pedido pendiente|PedidoPendiente|Pedido pendiente[:\s\-]*)[:\s\-]*([0-9]{6,})", texto)
-    if not pedido_pend:
-        pedido_pend = numero_sol  # en tu ejemplo son iguales; dejar como fallback
 
-    codigo = buscar_regex(r"(?:Cod\.?|Código|Cod)[:\s\-]*([0-9]{4,7})", texto)
-    if not codigo:
-        # buscar un código numérico aislado (6 dígitos)
-        codigo = buscar_regex(r"\b([0-9]{6})\b", texto)
+# ============================
+#  SUBIR ARCHIVO
+# ============================
 
-    # Descripción: texto largo entre código y unidad (fallback a buscar "Descripción")
-    descripcion = buscar_regex(r"Descripci[oó]n[:\s\-]*([A-Za-z0-9 \-\.,\(\)\+\/]+)", texto)
-    if not descripcion and codigo:
-        # intentar extraer la porción entre el código y la unidad identificada
-        unidad_tmp = buscar_regex(r"\b(FCO|UND|TAB|CAP|ML|MG)\b", texto)
-        if unidad_tmp:
-            pattern_desc_between = fr"{codigo}\s*(.+?)\s*{unidad_tmp}"
-            descripcion = buscar_regex(pattern_desc_between, texto, flags=re.IGNORECASE)
+archivo = st.file_uploader("Sube el archivo (imagen)", type=["png", "jpg", "jpeg"])
 
-    unidad = buscar_regex(r"\b(FCO|UND|TAB|CAP|ML|MG)\b", texto)
-    cantidad = buscar_regex(r"(?:Cant\.?|Cantidad|Cant)[:\s\-]*([0-9]+)", texto)
-    if not cantidad:
-        # si no se encuentra, buscar número al final de la línea que contenga unidad
-        m = re.search(rf"{unidad}\s*[xX]?\s*([0-9]+)\b", texto) if unidad else None
-        if m:
-            cantidad = m.group(1)
+if archivo:
+    st.image(archivo, caption="Documento cargado", use_column_width=True)
 
-    # Normalizar valores (quitar saltos extra)
-    def limpia(x):
-        return x.replace("\n", " ").strip() if isinstance(x, str) else ""
+    imagen = Image.open(archivo)
+    imagen_np = np.array(imagen)
 
-    numero_sol = limpia(numero_sol)
-    pedido_pend = limpia(pedido_pend)
-    codigo = limpia(codigo)
-    descripcion = limpia(descripcion)
-    unidad = limpia(unidad)
-    cantidad = limpia(cantidad)
+    # EXTRAER TEXTO GENERAL
+    texto = extraer_texto(imagen_np)
 
-    # Mostrar resultados detectados (verificación)
-    st.subheader("🔎 Valores extraídos (verifica antes de enviar)")
-    st.write("Número de solicitud:", numero_sol or "— vacío —")
-    st.write("Pedido pendiente:", pedido_pend or "— vacío —")
-    st.write("Código:", codigo or "— vacío —")
-    st.write("Descripción:", descripcion or "— vacío —")
-    st.write("Unidad:", unidad or "— vacío —")
-    st.write("Cantidad:", cantidad or "— vacío —")
+    st.subheader("📄 Texto detectado por OCR")
+    st.code(texto)
 
-    # Botón de envío (sólo si hay al menos un campo no vacío)
-    if st.button("Enviar a Google Sheets (via Google Form)"):
-        # si todos vacíos, no enviar
-        if not any([numero_sol, pedido_pend, cod]()
+    # EXTRAER CAMPOS
+    numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad = extraer_campos(texto)
+
+    st.subheader("📌 Datos extraídos")
+    st.write("📌 Número Solicitud:", numero_sol)
+    st.write("📌 Pedido Pendiente:", pedido_pend)
+    st.write("📌 Código:", codigo)
+    st.write("📌 Descripción:", descripcion)
+    st.write("📌 Unidad:", unidad)
+    st.write("📌 Cantidad:", cantidad)
+
+    # ============================
+    #  BOTÓN PARA ENVIAR AL FORM
+    # ============================
+
+    if st.button("Enviar a Google Sheets"):
+
+        # Validación básica
+        if not any([numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad]):
+            st.error("⚠ No se detectaron datos. Revisa la imagen o mejora el OCR.")
+        else:
+            payload = {
+                ENTRY_NUMERO_SOL: numero_sol,
+                ENTRY_PEDIDO: pedido_pend,
+                ENTRY_CODIGO: codigo,
+                ENTRY_DESCRIP: descripcion,
+                ENTRY_UNIDAD: unidad,
+                ENTRY_CANT: cantidad
+            }
+
+            try:
+                resp = requests.post(FORM_URL, data=payload)
+                if resp.status_code == 200:
+                    st.success("✔ Datos enviados correctamente a Google Sheets.")
+                else:
+                    st.error(f"Error HTTP {resp.status_code}")
+                    st.code(resp.text[:1000])
+            except Exception as e:
+                st.error(f"Error al enviar: {e}")
