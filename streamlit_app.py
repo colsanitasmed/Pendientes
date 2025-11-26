@@ -18,7 +18,7 @@ def extraer_datos(texto):
     # 1. Número de solicitud
     # ----------------------------
     num_sol = None
-    m = re.search(r"n[uú]mero de solicitud\s*(\d+)", lower)
+    m = re.search(r"N[uú]mero de solicitud\s*(\d+)", lower)
     if m:
         num_sol = m.group(1)
 
@@ -26,7 +26,7 @@ def extraer_datos(texto):
     # 2. Pedido pendiente
     # ----------------------------
     pedido = None
-    m = re.search(r"pedido pendiente\s*(\d+)", lower)
+    m = re.search(r"Pedido pendiente\s*(\d+)", lower)
     if m:
         pedido = m.group(1)
 
@@ -39,7 +39,7 @@ def extraer_datos(texto):
     indice_cod = None
 
     for i, l in enumerate(lineas):
-        if re.search(r"^cod[\.]?$", l.lower()):
+        if re.search(r"Cod[\.]?$", l.lower()):
             indice_cod = i
             break
 
