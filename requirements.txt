@@ -2,3 +2,6 @@ streamlit
 PyDrive3
 requests
 oauth2client
+easyocr
+pillow
+numpy
