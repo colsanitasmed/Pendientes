@@ -1,140 +1,157 @@
 import streamlit as st
-import requests
 import easyocr
+import re
+import requests
 from PIL import Image
 import numpy as np
 
-# ==============================
-# CONFIGURACIÓN
-# ==============================
+# ===============================
+#  FUNCIÓN DE EXTRACCIÓN
+# ===============================
+def extraer_datos(texto):
 
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
+    # ----------------------------------------
+    # 1. Extraer número de solicitud y pedido
+    # ----------------------------------------
+    num_sol = None
+    pedido = None
 
-# IDS DE TUS CAMPOS DE GOOGLE FORM
-ID_SOLICITUD  = "entry.611673084"
-ID_PEDIDO     = "entry.1680720626"
-ID_CODIGO     = "entry.832344567"
-ID_DESCRIP    = "entry.1533087800"
-ID_UNIDAD     = "entry.728245219"
-ID_CANTIDAD   = "entry.231047139"
+    sol_match = re.search(r"solicitud\s*(\d+)", texto.lower())
+    if sol_match:
+        num_sol = sol_match.group(1)
+
+    ped_match = re.search(r"pendiente\s*(\d+)", texto.lower())
+    if ped_match:
+        pedido = ped_match.group(1)
+
+    # ----------------------------------------
+    # 2. Separar líneas limpias
+    # ----------------------------------------
+    lineas = [l.strip() for l in texto.split("\n") if l.strip() != ""]
+
+    # ----------------------------------------
+    # 3. Detectar código (primer número de 5–6 dígitos)
+    # ----------------------------------------
+    codigo = None
+    for linea in lineas:
+        cod_match = re.search(r"\b(\d{5,6})\b", linea)
+        if cod_match:
+            codigo = cod_match.group(1)
+            break
+
+    # ----------------------------------------
+    # 4. Detectar unidad posible
+    # ----------------------------------------
+    posibles_unidades = ["FCO", "Fco", "TAB", "CAPS", "AMP", "ML", "G", "UND", "UNID"]
+
+    unidad = None
+    for linea in lineas:
+        if any(linea.upper().startswith(u.upper()) for u in posibles_unidades):
+            unidad = linea
+            break
+
+    # ----------------------------------------
+    # 5. Detectar cantidad (una línea que sea solo un número)
+    # ----------------------------------------
+    cantidad = None
+    for linea in lineas:
+        if re.fullmatch(r"\d+", linea):
+            cantidad = linea
+            break
+
+    # ----------------------------------------
+    # 6. Descripción (todo menos código/unidad/cantidad)
+    # ----------------------------------------
+    descripcion_partes = []
+    for linea in lineas:
+        l = linea
+
+        if codigo and codigo in l:
+            l = l.replace(codigo, "").strip()
+
+        if cantidad and l == cantidad:
+            continue
+
+        if unidad and l == unidad:
+            continue
+
+        if "Cod" in l or "Descripcion" in l or "Unid" in l:
+            continue
+
+        if re.search(r"[A-Za-z]", l):
+            descripcion_partes.append(l)
+
+    descripcion = " ".join(descripcion_partes).strip()
+    if descripcion == "":
+        descripcion = None
+
+    return {
+        "numero_solicitud": num_sol,
+        "pedido_pendiente": pedido,
+        "codigo": codigo,
+        "descripcion": descripcion,
+        "unidad": unidad,
+        "cantidad": cantidad
+    }
 
 
-# ==============================
-# EXTRACTOR DE CAMPOS (NUEVO)
-# ==============================
+# ===============================
+#  CONFIG STREAMLIT UI
+# ===============================
 
-def extraer_campos_ocr(texto):
+st.title("📸 OCR Automático para Pendientes")
 
-    import re
+uploaded = st.file_uploader("Carga la imagen del ticket:", type=["png", "jpg", "jpeg"])
 
-    # 1️⃣ Extraer número de solicitud y pedido
-    numero_sol = re.search(r"solicitud\s+(\d+)", texto, re.IGNORECASE)
-    pedido_pend = re.search(r"pendiente\s+(\d+)", texto, re.IGNORECASE)
+if uploaded:
+    image = Image.open(uploaded)
+    st.image(image, caption="Imagen cargada", use_column_width=True)
 
-    numero_sol = numero_sol.group(1) if numero_sol else ""
-    pedido_pend = pedido_pend.group(1) if pedido_pend else ""
+    # Convertir imagen a formato para easyocr
+    img_np = np.array(image)
 
-    # 2️⃣ Buscar bloque de medicamentos
-    patron = r"Cod\.\s*Descripcion\s*Unid\.?\s*Cant\s*([\s\S]+)"
-    bloque = re.search(patron, texto, re.IGNORECASE)
-
-    if not bloque:
-        return numero_sol, pedido_pend, "", "", "", ""
-
-    bloque = bloque.group(1).strip()
-
-    # Separar líneas útiles
-    lineas = [l.strip() for l in bloque.split("\n") if l.strip()]
-
-    # Primera línea → descripción
-    descripcion = lineas[0] if len(lineas) > 0 else ""
-
-    # Segunda línea → unidad
-    unidad = lineas[1] if len(lineas) > 1 else ""
-
-    # 3️⃣ CANTIDAD y CÓDIGO (DÍGITOS DESPUÉS DE LA UNIDAD)
-    cantidad = ""
-    codigo = ""
-
-    # Números detectados
-    numeros_desc = re.findall(r"\b\d+\b", descripcion)
-    numeros_unid = re.findall(r"\b\d+\b", unidad)
-
-    # Código = número grande en la descripción
-    for n in numeros_desc:
-        if 5 <= len(n) <= 7:
-            codigo = n
-
-    # Cantidad = número pequeño en unidad
-    for n in numeros_unid:
-        if len(n) <= 3:
-            cantidad = n
-
-    return numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad
-
-
-# ==============================
-# INTERFAZ STREAMLIT
-# ==============================
-
-st.title("📄 Cargue y Lectura Automática de Pendientes")
-
-archivo = st.file_uploader("Subir fotografía del pendiente", type=["png","jpg","jpeg"])
-
-if archivo:
-
-    st.image(archivo, caption="Imagen cargada", use_column_width=True)
-
-    # ==========================
-    # OCR EASYOCR
-    # ==========================
-
-    st.info("Procesando OCR…")
+    st.write("🔍 Ejecutando OCR...")
 
     reader = easyocr.Reader(["es"], gpu=False)
-    image = Image.open(archivo)
-    image_np = np.array(image)
+    result = reader.readtext(img_np, detail=0)
 
-    ocr_text = reader.readtext(image_np, detail=0)
-    texto_detectado = "\n".join(ocr_text)
+    texto = "\n".join(result)
 
     st.subheader("📝 Texto detectado:")
-    st.text(texto_detectado)
+    st.text(texto)
 
-    # ==========================
-    # EXTRAER CAMPOS
-    # ==========================
-
-    numero_sol, pedido_pend, codigo, descripcion, unidad, cantidad = extraer_campos_ocr(texto_detectado)
+    # EXTRAER DATOS
+    datos = extraer_datos(texto)
 
     st.subheader("📌 Datos extraídos:")
+    st.write(f"**Número Solicitud:** {datos['numero_solicitud']}")
+    st.write(f"**Pedido Pendiente:** {datos['pedido_pendiente']}")
+    st.write(f"**Código:** {datos['codigo']}")
+    st.write(f"**Descripción:** {datos['descripcion']}")
+    st.write(f"**Unidad:** {datos['unidad']}")
+    st.write(f"**Cantidad:** {datos['cantidad']}")
 
-    st.write(f"**Número Solicitud:** {numero_sol or '— vacío —'}")
-    st.write(f"**Pedido Pendiente:** {pedido_pend or '— vacío —'}")
-    st.write(f"**Código:** {codigo or '— vacío —'}")
-    st.write(f"**Descripción:** {descripcion or '— vacío —'}")
-    st.write(f"**Unidad:** {unidad or '— vacío —'}")
-    st.write(f"**Cantidad:** {cantidad or '— vacío —'}")
+    st.write("———")
 
-    # ==========================
-    # BOTÓN ENVIAR A GOOGLE FORM
-    # ==========================
+    # ===============================
+    #  ENVIAR A GOOGLE FORM
+    # ===============================
 
-    if st.button("📨 Enviar a Google Sheets"):
+    if st.button("📤 Enviar al Formulario"):
+        url = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
         payload = {
-            ID_SOLICITUD: numero_sol,
-            ID_PEDIDO: pedido_pend,
-            ID_CODIGO: codigo,
-            ID_DESCRIP: descripcion,
-            ID_UNIDAD: unidad,
-            ID_CANTIDAD: cantidad
+            "entry.611673084": datos["numero_solicitud"],
+            "entry.1680720626": datos["pedido_pendiente"],
+            "entry.832344567": datos["codigo"],
+            "entry.1533087800": datos["descripcion"],
+            "entry.728245219": datos["unidad"],
+            "entry.231047139": datos["cantidad"],
         }
 
-        resp = requests.post(FORM_URL, data=payload)
+        r = requests.post(url, data=payload)
 
-        if resp.status_code == 200:
-            st.success("Datos enviados correctamente a Google Sheets")
+        if r.status_code == 200:
+            st.success("✅ Datos enviados correctamente")
         else:
-            st.error("Error al enviar los datos")
-            st.write(resp.text)
+            st.error(f"❌ Error al enviar: {r.status_code}")
