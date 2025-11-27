@@ -91,6 +91,7 @@ def extract_products(text):
 # ---------------------------------------------
 st.set_page_config(page_title="OCR Pendientes", layout="centered")
 st.title("📄 OCR de Tickets de Pendientes")
+num_doc = st.text_input("Número de Documento del Usuario")# aca pegue
 
 uploaded = st.file_uploader("Sube la imagen del ticket", type=["png", "jpg", "jpeg"])
 
@@ -105,7 +106,7 @@ st.image(image, caption="Imagen cargada", use_column_width=True)
 # CAMPO MANUAL PARA DOCUMENTO DEL USUARIO
 # ---------------------------------------------
 st.subheader("🧾 Información del Usuario")
-num_doc = st.text_input("Número de Documento del Usuario")
+# de aca lo quite
 
 reader = load_reader()
 
