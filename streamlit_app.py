@@ -16,7 +16,7 @@ ENTRY_CODIGO = "entry.832344567"
 ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
-ENTRY_DOC = "entry.412830053"   # Nuevo campo Documento
+ENTRY_DOC = "entry.412830053"   # NUEVO CAMPO DOCUMENTO
 
 # ---------------------------------------------
 # Cargar OCR
@@ -26,7 +26,7 @@ def load_reader():
     return easyocr.Reader(["es"], gpu=False)
 
 # ---------------------------------------------
-# Función principal de extracción
+# Función de extracción de productos
 # ---------------------------------------------
 def extract_products(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -101,9 +101,10 @@ if not uploaded:
 image = Image.open(uploaded).convert("RGB")
 st.image(image, caption="Imagen cargada", use_column_width=True)
 
-# ------------------------------
-# Campo manual para Documento
-# ------------------------------
+# ---------------------------------------------
+# CAMPO MANUAL PARA DOCUMENTO DEL USUARIO
+# ---------------------------------------------
+st.subheader("🧾 Información del Usuario")
 num_doc = st.text_input("Número de Documento del Usuario")
 
 reader = load_reader()
@@ -160,7 +161,7 @@ if productos:
                 ENTRY_DESCRIP: p["descripcion"],
                 ENTRY_UNIDAD: p["unidad"],
                 ENTRY_CANT: p["cantidad"],
-                ENTRY_DOC: num_doc  # <- campo manual
+                ENTRY_DOC: num_doc
             }
 
             try:
