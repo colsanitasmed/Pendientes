@@ -16,8 +16,7 @@ ENTRY_CODIGO = "entry.832344567"
 ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
-
-
+ENTRY_DOC = "entry.412830053"   # <--- Nuevo campo Documento
 
 # ---------------------------------------------
 # Cargar OCR
@@ -139,12 +138,17 @@ num_sol = m1.group(1) if m1 else ""
 m2 = re.search(r"pendiente\s*(\d{6,12})", ocr_text, re.IGNORECASE)
 num_ped = m2.group(1) if m2 else ""
 
+# Número de Documento (nuevo)
+m3 = re.search(r"\b(\d{6,12})\b", ocr_text)
+num_doc = m3.group(1) if m3 else ""
+
 # ---------------------------------------------
 # MOSTRAR RESULTADOS
 # ---------------------------------------------
 st.subheader("📌 Datos extraídos")
 st.write("Número solicitud:", num_sol or "— vacío —")
 st.write("Pedido pendiente:", num_ped or "— vacío —")
+st.write("Documento usuario:", num_doc or "— vacío —")
 st.write(f"Productos detectados: {len(productos)}")
 
 for i, p in enumerate(productos, start=1):
@@ -168,7 +172,8 @@ if productos:
                 ENTRY_CODIGO: p["codigo"],
                 ENTRY_DESCRIP: p["descripcion"],
                 ENTRY_UNIDAD: p["unidad"],
-                ENTRY_CANT: p["cantidad"]
+                ENTRY_CANT: p["cantidad"],
+                ENTRY_DOC: num_doc     # <--- Nuevo envío
             }
             try:
                 requests.post(FORM_URL, data=payload, timeout=10)
