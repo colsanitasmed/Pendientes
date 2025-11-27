@@ -16,7 +16,7 @@ ENTRY_CODIGO = "entry.832344567"
 ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
-ENTRY_DOC = "entry.412830053"   # <--- Nuevo campo Documento
+ENTRY_DOC = "entry.412830053"   # Nuevo campo Documento
 
 # ---------------------------------------------
 # Cargar OCR
@@ -34,26 +34,19 @@ def extract_products(text):
 
     for i, line in enumerate(lines):
 
-        # Detectar código (5-6 dígitos exactos)
         if re.fullmatch(r"\d{5,6}", line):
             codigo = line
 
-            # -------------------------
-            # DESCRIPCIÓN
-            # -------------------------
             desc_lines = []
             k = i - 1
             while k >= 0 and not re.search(r"(cod|descrip|unid|cant)", lines[k], re.IGNORECASE):
-                if not re.fullmatch(r"\d{8,12}", lines[k]):  # evitar teléfonos
+                if not re.fullmatch(r"\d{8,12}", lines[k]):
                     desc_lines.append(lines[k])
                 k -= 1
 
             desc_lines.reverse()
             descripcion = " ".join(desc_lines).strip()
 
-            # -------------------------
-            # UNIDAD
-            # -------------------------
             unidad = ""
             unidad_idx = None
             for j in range(i + 1, min(i + 6, len(lines))):
@@ -62,19 +55,14 @@ def extract_products(text):
                     unidad_idx = j
                     break
 
-            # -------------------------
-            # CANTIDAD (LÓGICA MEJORADA)
-            # -------------------------
             cantidad = ""
 
-            # 1️⃣ Regla principal: buscar números pequeños después de la UNIDAD
             if unidad_idx is not None:
                 for j in range(unidad_idx + 1, min(unidad_idx + 8, len(lines))):
                     nums = re.findall(r"\b(\d{1,3})\b", lines[j])
                     if nums:
                         cantidad = nums[-1]
 
-            # 2️⃣ Si no se encontró, buscar en las 3 líneas siguientes al CÓDIGO
             if not cantidad:
                 for j in range(i + 1, min(i + 4, len(lines))):
                     nums = re.findall(r"\b(\d{1,3})\b", lines[j])
@@ -82,7 +70,6 @@ def extract_products(text):
                         cantidad = nums[0]
                         break
 
-            # 3️⃣ Si aún vacío, intentar números embebidos tipo "x10" o "10u"
             if not cantidad:
                 for j in range(i + 1, min(i + 4, len(lines))):
                     m = re.search(r"(\d{1,3})\D", lines[j])
@@ -114,6 +101,11 @@ if not uploaded:
 image = Image.open(uploaded).convert("RGB")
 st.image(image, caption="Imagen cargada", use_column_width=True)
 
+# ------------------------------
+# Campo manual para Documento
+# ------------------------------
+num_doc = st.text_input("Número de Documento del Usuario")
+
 reader = load_reader()
 
 with st.spinner("Ejecutando OCR..."):
@@ -130,17 +122,11 @@ st.code(ocr_text)
 # ---------------------------------------------
 productos = extract_products(ocr_text)
 
-# Número de solicitud
 m1 = re.search(r"solicitud\s*(\d{6,12})", ocr_text, re.IGNORECASE)
 num_sol = m1.group(1) if m1 else ""
 
-# Pedido pendiente
 m2 = re.search(r"pendiente\s*(\d{6,12})", ocr_text, re.IGNORECASE)
 num_ped = m2.group(1) if m2 else ""
-
-# Número de Documento (nuevo)
-m3 = re.search(r"\b(\d{6,12})\b", ocr_text)
-num_doc = m3.group(1) if m3 else ""
 
 # ---------------------------------------------
 # MOSTRAR RESULTADOS
@@ -164,6 +150,7 @@ for i, p in enumerate(productos, start=1):
 # ---------------------------------------------
 if productos:
     if st.button("📤 Enviar productos al Google Sheet"):
+
         enviados = 0
         for p in productos:
             payload = {
@@ -173,8 +160,9 @@ if productos:
                 ENTRY_DESCRIP: p["descripcion"],
                 ENTRY_UNIDAD: p["unidad"],
                 ENTRY_CANT: p["cantidad"],
-                ENTRY_DOC: num_doc     # <--- Nuevo envío
+                ENTRY_DOC: num_doc  # <- campo manual
             }
+
             try:
                 requests.post(FORM_URL, data=payload, timeout=10)
                 enviados += 1
