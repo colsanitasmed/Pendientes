@@ -1,155 +1,125 @@
-import streamlit as st
-import easyocr
 import re
-import requests
-from PIL import Image
-import numpy as np
-
-# ===============================
-#  FUNCIÓN DE EXTRACCIÓN AVANZADA
-# ===============================
 
 def extraer_datos(texto):
+    # ---------------------------
+    # 1️⃣ Número de Solicitud
+    # ---------------------------
+    num_sol = re.search(r'Número de solicitud\s*(\d+)', texto, re.IGNORECASE)
+    numero_solicitud = num_sol.group(1) if num_sol else None
 
-    # Normalizar texto
-    lower = texto.lower()
+    # ---------------------------
+    # 2️⃣ Pedido pendiente
+    # ---------------------------
+    ped_pen = re.search(r'Pedido pendiente\s*(\d+)', texto, re.IGNORECASE)
+    pedido_pendiente = ped_pen.group(1) if ped_pen else None
 
-    # ----------------------------
-    # 1. Número de solicitud
-    # ----------------------------
-    num_sol = None
-    m = re.search(r"n[uú]mero de solicitud\s*(\d+)", lower)
-    if m:
-        num_sol = m.group(1)
+    # ----------------------------------------------------
+    # 3️⃣ Extraer bloque después de DETALLE DE PENDIENTE
+    # ----------------------------------------------------
+    bloque_match = re.search(
+        r'Detalle de Pendiente(.*)',
+        texto,
+        re.IGNORECASE | re.DOTALL
+    )
 
-    # ----------------------------
-    # 2. Pedido pendiente
-    # ----------------------------
-    pedido = None
-    m = re.search(r"pedido pendiente\s*(\d+)", lower)
-    if m:
-        pedido = m.group(1)
+    if not bloque_match:
+        return {
+            "numero_solicitud": numero_solicitud,
+            "pedido_pendiente": pedido_pendiente,
+            "productos": []
+        }
 
-    lineas = [l.strip() for l in texto.split("\n") if l.strip()]
+    bloque = bloque_match.group(1)
 
-    # ----------------------------
-    # 3. Buscar “Cod.” y extraer el código correcto
-    # ----------------------------
-    codigo = None
-    indice_cod = None
+    # limpiar líneas vacías
+    lineas = [l.strip() for l in bloque.split("\n") if l.strip()]
 
-    for i, l in enumerate(lineas):
-        if re.search(r"^cod[\.]?$", l.lower()):
-            indice_cod = i
-            break
+    # ----------------------------------------------------
+    # 4️⃣ Buscar líneas que sean códigos (4–8 dígitos)
+    # ----------------------------------------------------
+    indices_codigos = []
+    for i, linea in enumerate(lineas):
+        if re.fullmatch(r'\d{4,8}', linea):
+            indices_codigos.append(i)
 
-    if indice_cod is not None:
-        for j in range(indice_cod, min(indice_cod + 5, len(lineas))):
-            match = re.search(r"\b(\d{5,6})\b", lineas[j])
-            if match:
-                codigo = match.group(1)
+    productos = []
+
+    # ----------------------------------------------------
+    # 5️⃣ Procesar cada producto encontrado
+    # ----------------------------------------------------
+    for idx, pos_codigo in enumerate(indices_codigos):
+        codigo = lineas[pos_codigo]
+
+        # Descripción = desde la línea después de encabezados hasta antes del código
+        inicio_desc = 0
+        # buscar palabra "Cant" o similar
+        for j, l in enumerate(lineas):
+            if re.search(r'^Cant$', l, re.IGNORECASE):
+                inicio_desc = j + 1
                 break
 
-    # ----------------------------
-    # 4. Buscar "Unid." y luego la unidad real
-    # ----------------------------
-    posibles_unidades = ["FCO", "Fco", "Tab", "CAP", "Amp", "ml", "ML", "G"]
+        # descripción entre inicio_desc y pos_codigo
+        descripcion = " ".join(lineas[inicio_desc:pos_codigo])
 
-    unidad = None
-    indice_unid = None
+        # Unidad = línea después del código
+        unidad = None
+        if pos_codigo + 1 < len(lineas):
+            unidad = lineas[pos_codigo + 1]
 
-    for i, l in enumerate(lineas):
-        if re.search(r"^unid[\.]?$", l.lower()):
-            indice_unid = i
-            break
+        # Cantidad = primera línea que sea número pequeño (>1 y <9999)
+        cantidad = None
+        for l in lineas[pos_codigo:]:
+            if re.fullmatch(r'\d{1,4}', l):
+                if l not in [numero_solicitud, pedido_pendiente, codigo]:
+                    cantidad = l
+                    break
 
-    if indice_unid is not None:
-        for j in range(indice_unid + 1, min(indice_unid + 5, len(lineas))):
-            if any(u.lower() in lineas[j].lower().split() for u in posibles_unidades):
-                unidad = lineas[j]
-                break
+        productos.append({
+            "codigo": codigo,
+            "descripcion": descripcion,
+            "unidad": unidad,
+            "cantidad": cantidad
+        })
 
-    # ----------------------------
-    # 5. Buscar “Cant” y luego la cantidad real
-    # ----------------------------
-    cantidad = None
-    indice_cant = None
-
-    for i, l in enumerate(lineas):
-        if re.search(r"^cant[\.]?$", l.lower()):
-            indice_cant = i
-            break
-
-    if indice_cant is not None:
-        for j in range(indice_cant + 1, min(indice_cant + 4, len(lineas))):
-            if re.fullmatch(r"\d{1,3}", lineas[j]):
-                cantidad = lineas[j]
-                break
-
-    # ----------------------------
-    # 6. Descripción = líneas entre código y unidad
-    # ----------------------------
-    descripcion = None
-    if codigo and unidad:
-        idx_codigo = next((i for i, l in enumerate(lineas) if codigo in l), None)
-        idx_unidad = next((i for i, l in enumerate(lineas) if unidad in l), None)
-
-        if idx_codigo is not None and idx_unidad is not None and idx_unidad > idx_codigo:
-            desc_partes = lineas[idx_codigo+1 : idx_unidad]
-            descripcion = " ".join(desc_partes).strip()
-
+    # ----------------------------------------------------
+    # Resultado final
+    # ----------------------------------------------------
     return {
-        "numero_solicitud": num_sol,
-        "pedido_pendiente": pedido,
-        "codigo": codigo,
-        "descripcion": descripcion,
-        "unidad": unidad,
-        "cantidad": cantidad,
+        "numero_solicitud": numero_solicitud,
+        "pedido_pendiente": pedido_pendiente,
+        "productos": productos
     }
 
 
-# ===============================
-#  STREAMLIT APP
-# ===============================
+# ------------------------------
+# EJEMPLO DE PRUEBA
+# ------------------------------
 
-st.title("📸 OCR Automático para Pendientes")
+texto = """
+Lineas de servicio al Cliente
+Bogcta (031) 4430200
+Resto dei Pals: 01-8000-99999
+Número de solicitud
+323993706
+Pedido pendiente
+323893706
+Atendido por
+Detalle de Pendiente
+Cod.
+Descripcion
+Unid.
+Cant
+PREP MAG CANNABIDIOL
+(CBD)+TETRAHIDROCANNABIDIO
+391092
+Fco
+6
+Otro producto ejemplo
+Descripcion larga
+553210
+Amp
+2
+"""
 
-file = st.file_uploader("Carga la imagen del ticket", type=["png", "jpg", "jpeg"])
-
-if file:
-    image = Image.open(file)
-    st.image(image, caption="Imagen cargada", use_column_width=True)
-
-    # OCR
-    reader = easyocr.Reader(["es"], gpu=False)
-    ocr_result = reader.readtext(np.array(image), detail=0)
-    texto = "\n".join(ocr_result)
-
-    st.subheader("📝 Texto detectado:")
-    st.text(texto)
-
-    # EXTRAER DATOS
-    datos = extraer_datos(texto)
-
-    st.subheader("📌 Datos extraídos:")
-    st.write(datos)
-
-    # ENVIAR A GOOGLE FORM
-    if st.button("📤 Enviar al Formulario"):
-        url = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
-
-        payload = {
-            "entry.611673084": datos["numero_solicitud"],
-            "entry.1680720626": datos["pedido_pendiente"],
-            "entry.832344567": datos["codigo"],
-            "entry.1533087800": datos["descripcion"],
-            "entry.728245219": datos["unidad"],
-            "entry.231047139": datos["cantidad"],
-        }
-
-        r = requests.post(url, data=payload)
-
-        if r.status_code == 200:
-            st.success("Datos enviados correctamente")
-        else:
-            st.error(f"Error al enviar ({r.status_code})")
+resultado = extraer_datos(texto)
+print(resultado)
