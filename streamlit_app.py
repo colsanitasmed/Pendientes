@@ -1,12 +1,12 @@
 import streamlit as st
 import easyocr
 import numpy as np
+import requests
 from PIL import Image
 import re
-import requests
 
 # ---------------------------------------------
-# CONFIGURACIÓN DE GOOGLE FORM (IDS CORRECTOS)
+# CONFIGURACIÓN GOOGLE FORM
 # ---------------------------------------------
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
@@ -16,7 +16,7 @@ ENTRY_CODIGO = "entry.832344567"
 ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
-ENTRY_DOC = "entry.412830053"   # NUEVO CAMPO DOCUMENTO
+ENTRY_DOC = "entry.412830053"
 
 # ---------------------------------------------
 # Cargar OCR
@@ -26,7 +26,7 @@ def load_reader():
     return easyocr.Reader(["es"], gpu=False)
 
 # ---------------------------------------------
-# Función de extracción de productos
+# Extraer productos
 # ---------------------------------------------
 def extract_products(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -56,7 +56,6 @@ def extract_products(text):
                     break
 
             cantidad = ""
-
             if unidad_idx is not None:
                 for j in range(unidad_idx + 1, min(unidad_idx + 8, len(lines))):
                     nums = re.findall(r"\b(\d{1,3})\b", lines[j])
@@ -91,8 +90,11 @@ def extract_products(text):
 # ---------------------------------------------
 st.set_page_config(page_title="OCR Pendientes", layout="centered")
 st.title("📄 OCR de Tickets de Pendientes")
-num_doc = st.text_input("Número de Documento del Usuario")# aca pegue
 
+# Campo de documento
+num_doc = st.text_input("Número de Documento del Usuario")
+
+# Carga de imagen
 uploaded = st.file_uploader("Sube la imagen del ticket", type=["png", "jpg", "jpeg"])
 
 if not uploaded:
@@ -102,14 +104,8 @@ if not uploaded:
 image = Image.open(uploaded).convert("RGB")
 st.image(image, caption="Imagen cargada", use_column_width=True)
 
-# ---------------------------------------------
-# CAMPO MANUAL PARA DOCUMENTO DEL USUARIO
-# ---------------------------------------------
-st.subheader("🧾 Información del Usuario")
-# de aca lo quite
-
+# OCR
 reader = load_reader()
-
 with st.spinner("Ejecutando OCR..."):
     img_np = np.array(image)
     lines = reader.readtext(img_np, detail=0, paragraph=False)
@@ -120,7 +116,7 @@ st.subheader("📝 Texto detectado")
 st.code(ocr_text)
 
 # ---------------------------------------------
-# Extracción
+# Extracción automática
 # ---------------------------------------------
 productos = extract_products(ocr_text)
 
@@ -148,29 +144,41 @@ for i, p in enumerate(productos, start=1):
     st.write("---")
 
 # ---------------------------------------------
-# ENVÍO A GOOGLE FORM
+# VALIDACIÓN DE CAMPOS VACÍOS
 # ---------------------------------------------
-if productos:
-    if st.button("📤 Enviar productos al Google Sheet"):
+campos_invalidos = (
+    not num_doc or
+    not num_sol or
+    not num_ped or
+    not productos or
+    any(not p["codigo"] or not p["descripcion"] or not p["unidad"] or not p["cantidad"] for p in productos)
+)
 
-        enviados = 0
-        for p in productos:
-            payload = {
-                ENTRY_SOLICITUD: num_sol,
-                ENTRY_PEDIDO: num_ped,
-                ENTRY_CODIGO: p["codigo"],
-                ENTRY_DESCRIP: p["descripcion"],
-                ENTRY_UNIDAD: p["unidad"],
-                ENTRY_CANT: p["cantidad"],
-                ENTRY_DOC: num_doc
-            }
+if campos_invalidos:
+    st.error("⚠️ El ticket no es legible. Por favor cargue un ticket claro para procesar los datos.")
+    st.stop()
 
-            try:
-                requests.post(FORM_URL, data=payload, timeout=10)
-                enviados += 1
-            except:
-                pass
+# ---------------------------------------------
+# ENVÍO
+# ---------------------------------------------
+if st.button("📤 Enviar productos al Google Sheet"):
 
-        st.success(f"Se enviaron {enviados} productos correctamente.")
-else:
-    st.warning("No se detectaron productos.")
+    enviados = 0
+    for p in productos:
+        payload = {
+            ENTRY_SOLICITUD: num_sol,
+            ENTRY_PEDIDO: num_ped,
+            ENTRY_CODIGO: p["codigo"],
+            ENTRY_DESCRIP: p["descripcion"],
+            ENTRY_UNIDAD: p["unidad"],
+            ENTRY_CANT: p["cantidad"],
+            ENTRY_DOC: num_doc
+        }
+
+        try:
+            requests.post(FORM_URL, data=payload, timeout=10)
+            enviados += 1
+        except:
+            pass
+
+    st.success(f"Se enviaron {enviados} productos correctamente.")
