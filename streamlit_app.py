@@ -1,164 +1,104 @@
 import streamlit as st
-import easyocr
-import numpy as np
+import pytesseract
 from PIL import Image
-import re
 import requests
+from io import BytesIO
 
-# ---------------------------------------------
-# CONFIGURACIÓN DE GOOGLE FORM (IDS CORRECTOS)
-# ---------------------------------------------
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
-
+# ==============================
+# IDS DEL FORMULARIO DE GOOGLE
+# ==============================
 ENTRY_SOLICITUD = "entry.611673084"
 ENTRY_PEDIDO = "entry.1680720626"
 ENTRY_CODIGO = "entry.832344567"
 ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
+ENTRY_DOCUMENTO = "entry.412830053"   # <<< NUEVO CAMPO (Actualiza este ID!!)
 
-# ---------------------------------------------
-# Cargar OCR
-# ---------------------------------------------
-@st.cache_resource
-def load_reader():
-    return easyocr.Reader(["es"], gpu=False)
+# URL del formulario
+GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScQHnVAdEz_udkq8AjtG7NfCQbHcsHFt3c1_xxxxx/formResponse"
 
-# ---------------------------------------------
-# Función principal de extracción
-# ---------------------------------------------
-def extract_products(text):
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
-    productos = []
+st.title("📄 Lector de Ticket y Envío Automático")
 
-    for i, line in enumerate(lines):
+# ==================================
+# 1️⃣ NUEVO CAMPO: DOCUMENTO USUARIO
+# ==================================
+documento_usuario = st.text_input("Número de Documento del Usuario")
 
-        # Detectar código (5-6 dígitos exactos)
-        if re.fullmatch(r"\d{5,6}", line):
-            codigo = line
+# ==============================
+# 2️⃣ SUBIR IMAGEN DEL TICKET
+# ==============================
+uploaded_file = st.file_uploader("Cargar imagen del ticket", type=["jpg", "jpeg", "png"])
 
-            # -------------------------
-            # DESCRIPCIÓN
-            # -------------------------
-            desc_lines = []
-            k = i - 1
-            while k >= 0 and not re.search(r"(cod|descrip|unid|cant)", lines[k], re.IGNORECASE):
-                # evitar capturar teléfonos y números largos
-                if not re.fullmatch(r"\d{8,12}", lines[k]):
-                    desc_lines.append(lines[k])
-                k -= 1
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
 
-            desc_lines.reverse()
-            descripcion = " ".join(desc_lines).strip()
+    # OCR
+    text = pytesseract.image_to_string(image, lang="spa")
 
-            # -------------------------
-            # UNIDAD
-            # -------------------------
-            unidad = ""
-            unidad_idx = None
-            for j in range(i + 1, min(i + 6, len(lines))):
-                if re.fullmatch(r"(fco|tab|caps?|amp|ml|und)", lines[j], re.IGNORECASE):
-                    unidad = lines[j]
-                    unidad_idx = j
-                    break
+    st.subheader("📌 Datos extraídos")
 
-            # -------------------------
-            # CANTIDAD — LÓGICA MEJORADA
-            # Buscar el último número pequeño (1–3 dígitos) después de la unidad
-            # -------------------------
-            cantidad = ""
-            if unidad_idx is not None:
-                for j in range(unidad_idx + 1, min(unidad_idx + 8, len(lines))):
-                    nums = re.findall(r"\b(\d{1,3})\b", lines[j])
-                    if nums:
-                        cantidad = nums[-1]  # último número pequeño encontrado
+    # ======================
+    # EXTRAER DATOS DEL TICKET
+    # ======================
+    def find_value(pattern, text):
+        import re
+        match = re.search(pattern, text, re.IGNORECASE)
+        return match.group(1).strip() if match else ""
 
-            productos.append({
-                "codigo": codigo,
-                "descripcion": descripcion,
-                "unidad": unidad,
-                "cantidad": cantidad
-            })
+    nro_solicitud = find_value(r"Solicitud[:\- ]+(\d+)", text)
+    nro_pedido = find_value(r"Pedido[:\- ]+(\d+)", text)
+    codigo = find_value(r"C[oó]digo[:\- ]+(\d+)", text)
+    descripcion = find_value(r"Descripci[oó]n[:\- ]+(.+)", text)
+    unidad = find_value(r"Unidad[:\- ]+(\w+)", text)
+    cantidad = find_value(r"Cantidad[:\- ]+(\d+)", text)
 
-    return productos
+    # Mostrar datos detectados
+    st.write(f"**Número solicitud:** {nro_solicitud or '— vacío —'}")
+    st.write(f"**Pedido pendiente:** {nro_pedido or '— vacío —'}")
+    st.write(f"**Código:** {codigo or '— vacío —'}")
+    st.write(f"**Descripción:** {descripcion or '— vacío —'}")
+    st.write(f"**Unidad:** {unidad or '— vacío —'}")
+    st.write(f"**Cantidad:** {cantidad or '— vacío —'}")
 
-# ---------------------------------------------
-# STREAMLIT UI
-# ---------------------------------------------
-st.set_page_config(page_title="OCR Pendientes", layout="centered")
-st.title("📄 OCR de Tickets de Pendientes")
+    # =========================================
+    # 3️⃣ VALIDAR QUE TODOS LOS CAMPOS EXISTEN
+    # =========================================
+    campos = {
+        "Documento del Usuario": documento_usuario,
+        "Solicitud": nro_solicitud,
+        "Pedido": nro_pedido,
+        "Código": codigo,
+        "Descripción": descripcion,
+        "Unidad": unidad,
+        "Cantidad": cantidad,
+    }
 
-uploaded = st.file_uploader("Sube la imagen del ticket", type=["png", "jpg", "jpeg"])
+    datos_incompletos = [campo for campo, valor in campos.items() if not valor]
 
-if not uploaded:
-    st.info("Por favor sube una imagen para procesar.")
-    st.stop()
+    if datos_incompletos:
+        st.error("❌ No se pudieron leer correctamente todos los campos. "
+                 "Por favor cargue un ticket más legible.")
 
-# Convertir imagen a RGB
-image = Image.open(uploaded).convert("RGB")
-st.image(image, caption="Imagen cargada", use_column_width=True)
-
-reader = load_reader()
-
-with st.spinner("Ejecutando OCR..."):
-    img_np = np.array(image)
-    lines = reader.readtext(img_np, detail=0, paragraph=False)
-
-ocr_text = "\n".join(lines)
-
-st.subheader("📝 Texto detectado")
-st.code(ocr_text)
-
-# ---------------------------------------------
-# Extracción
-# ---------------------------------------------
-productos = extract_products(ocr_text)
-
-# Número de solicitud
-m1 = re.search(r"solicitud\s*(\d{6,12})", ocr_text, re.IGNORECASE)
-num_sol = m1.group(1) if m1 else ""
-
-# Pedido pendiente
-m2 = re.search(r"pendiente\s*(\d{6,12})", ocr_text, re.IGNORECASE)
-num_ped = m2.group(1) if m2 else ""
-
-# ---------------------------------------------
-# MOSTRAR RESULTADOS
-# ---------------------------------------------
-st.subheader("📌 Datos extraídos")
-st.write("Número solicitud:", num_sol or "— vacío —")
-st.write("Pedido pendiente:", num_ped or "— vacío —")
-st.write(f"Productos detectados: {len(productos)}")
-
-for i, p in enumerate(productos, start=1):
-    st.markdown(f"### Producto {i}")
-    st.write("Código:", p["codigo"] or "— vacío —")
-    st.write("Descripción:", p["descripcion"] or "— vacío —")
-    st.write("Unidad:", p["unidad"] or "— vacío —")
-    st.write("Cantidad:", p["cantidad"] or "— vacío —")
-    st.write("---")
-
-# ---------------------------------------------
-# ENVÍO A GOOGLE FORM
-# ---------------------------------------------
-if productos:
-    if st.button("📤 Enviar productos al Google Sheet"):
-        enviados = 0
-        for p in productos:
+    else:
+        # =========================================
+        # 4️⃣ ENVIAR FORMULARIO SI TODO ESTÁ COMPLETO
+        # =========================================
+        if st.button("📨 Enviar datos al formulario"):
+            
             payload = {
-                ENTRY_SOLICITUD: num_sol,
-                ENTRY_PEDIDO: num_ped,
-                ENTRY_CODIGO: p["codigo"],
-                ENTRY_DESCRIP: p["descripcion"],
-                ENTRY_UNIDAD: p["unidad"],
-                ENTRY_CANT: p["cantidad"]
+                ENTRY_DOCUMENTO: documento_usuario,
+                ENTRY_SOLICITUD: nro_solicitud,
+                ENTRY_PEDIDO: nro_pedido,
+                ENTRY_CODIGO: codigo,
+                ENTRY_DESCRIP: descripcion,
+                ENTRY_UNIDAD: unidad,
+                ENTRY_CANT: cantidad
             }
-            try:
-                requests.post(FORM_URL, data=payload, timeout=10)
-                enviados += 1
-            except:
-                pass
 
-        st.success(f"Se enviaron {enviados} productos correctamente.")
-else:
-    st.warning("No se detectaron productos.")
+            response = requests.post(GOOGLE_FORM_URL, data=payload)
+
+            if response.status_code == 200:
+                st.success("✅ Datos enviados correctamente.")
+            else:
+                st.error("⚠️ Error enviando los datos. Verifique la URL del formulario.")
