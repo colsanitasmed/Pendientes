@@ -11,7 +11,7 @@ import io
 # ----------------------------
 # CONFIG: Google Form IDs (los tuyos)
 # ----------------------------
-ENTRY_DOCUMENTO = "entry.999999999"   # <-- PON AQUI el entry real si lo tienes; si no, déjalo así
+ENTRY_DOCUMENTO = "entry.412830053"   # <-- PON AQUI el entry real si lo tienes; si no, déjalo así
 ENTRY_SOLICITUD  = "entry.611673084"
 ENTRY_PEDIDO     = "entry.1680720626"
 ENTRY_CODIGO     = "entry.832344567"
