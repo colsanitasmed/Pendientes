@@ -1,5 +1,6 @@
 import streamlit as st
-import pytesseract
+import easyocr
+import numpy as np
 from PIL import Image
 import re
 import requests
@@ -14,74 +15,77 @@ ENTRY_DESCRIP = "entry.1533087800"
 ENTRY_UNIDAD = "entry.728245219"
 ENTRY_CANT = "entry.231047139"
 
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdXXXXXXX/formResponse"  # ← REEMPLAZA TU URL REAL
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
+
+
+# =============================
+#  OCR READER (CACHEADO)
+# =============================
+@st.cache_resource
+def get_reader():
+    return easyocr.Reader(["es"], gpu=False)
 
 
 # =============================
 #  FUNCIONES DE EXTRACCIÓN
 # =============================
 
-def extract_numbers(text):
-    """Extrae el primer número de 6+ dígitos."""
-    match = re.search(r"\b\d{6,}\b", text)
-    return match.group(0) if match else ""
-
-
 def extract_numero_solicitud(text):
-    m = re.search(r"(?i)número de solicitud\s*\n?(\d+)", text)
+    m = re.search(r"(?i)n[uú]mero de solicitud\s*(\d+)", text)
     return m.group(1) if m else ""
 
 
 def extract_pedido_pendiente(text):
-    m = re.search(r"(?i)pedido pendiente\s*\n?(\d+)", text)
+    m = re.search(r"(?i)pedido pendiente\s*(\d+)", text)
     return m.group(1) if m else ""
 
 
 def extract_products(text):
     """
-    Busca el patrón del producto:
-    Código (6 dígitos)
-    Descripción
-    Unidad (Fco, Tab, Caps, etc.)
-    Cantidad (último número suelto en el bloque)
+    Extrae código, descripción, unidad y cantidad.
+    - Código = número de 5-6 dígitos
+    - Unidad = Fco, Tab, Caps, etc.
+    - Cantidad = número pequeño (1–3 dígitos)
     """
-
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     productos = []
 
-    # 1. buscar códigos de 6 dígitos
     for i, line in enumerate(lines):
-        if re.fullmatch(r"\d{6}", line):  # línea con código exacto
+
+        # Código (5-6 dígitos)
+        if re.fullmatch(r"\d{5,6}", line):
             codigo = line
 
-            # 2. descripción en las líneas superiores inmediatas
+            # Descripción = líneas arriba hasta encontrar encabezado
+            descripcion = ""
             desc_lines = []
             k = i - 1
-            while k >= 0 and not re.fullmatch(r"Cod\.?|Unid\.?|Cant\.?|Descripción|Descripcion", lines[k], re.IGNORECASE):
-                if not re.fullmatch(r"\d{6}", lines[k]):
+            while k >= 0 and not re.search(r"(cod|descrip|unid|cant)", lines[k], re.IGNORECASE):
+                if not re.fullmatch(r"\d{5,6}", lines[k]):
                     desc_lines.append(lines[k])
                 k -= 1
             desc_lines.reverse()
             descripcion = " ".join(desc_lines).strip()
 
-            # 3. Unidad: debe estar en líneas cercanas debajo del código
+            # Unidad
             unidad = ""
-            for j in range(i + 1, min(i + 4, len(lines))):
-                if re.fullmatch(r"(Fco|Tab|Caps?|Unidad|Ampolla)", lines[j], re.IGNORECASE):
+            for j in range(i + 1, min(i + 5, len(lines))):
+                if re.fullmatch(r"(fco|tab|caps?|amp|ml|und)", lines[j], re.IGNORECASE):
                     unidad = lines[j]
                     break
 
-            # 4. Cantidad: último número independiente después del bloque
+            # Cantidad
             cantidad = ""
-            for j in range(i + 1, len(lines)):
-                if re.fullmatch(r"\d+", lines[j]):
+            for j in range(i + 1, min(i + 8, len(lines))):
+                if re.fullmatch(r"\d{1,3}", lines[j]):
                     cantidad = lines[j]
+                    break
 
             productos.append({
                 "codigo": codigo,
                 "descripcion": descripcion,
                 "unidad": unidad,
-                "cantidad": cantidad,
+                "cantidad": cantidad
             })
 
     return productos
@@ -90,63 +94,59 @@ def extract_products(text):
 # =============================
 #  INTERFAZ STREAMLIT
 # =============================
-
 st.title("📄 OCR Automático de Pendientes")
-st.write("Carga una imagen nítida del pendiente para extraer la información automáticamente.")
 
-uploaded_file = st.file_uploader("Sube la imagen del pendiente", type=["png", "jpg", "jpeg"])
+uploaded = st.file_uploader("Sube la imagen del pendiente", type=["png", "jpg", "jpeg"])
 
-if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Imagen cargada", use_column_width=True)
+if not uploaded:
+    st.stop()
 
-    with st.spinner("Procesando OCR..."):
-        text = pytesseract.image_to_string(image, lang="spa")
+image = Image.open(uploaded).convert("RGB")
+st.image(image, caption="Imagen cargada", use_column_width=True)
 
-    st.subheader("📝 Texto detectado:")
-    st.text(text)
+# OCR
+with st.spinner("Procesando OCR con EasyOCR..."):
+    reader = get_reader()
+    ocr_result = reader.readtext(np.array(image), detail=0, paragraph=False)
 
-    # Extraer datos
-    numero_solicitud = extract_numero_solicitud(text)
-    pedido_pendiente = extract_pedido_pendiente(text)
-    productos = extract_products(text)
+text = "\n".join(ocr_result)
 
-    # Mostrar resumen
-    st.subheader("📌 Datos extraídos")
+st.subheader("📝 Texto detectado:")
+st.code(text)
 
-    st.write(f"**Número solicitud:** {numero_solicitud or '— vacío —'}")
-    st.write(f"**Pedido pendiente:** {pedido_pendiente or '— vacío —'}")
-    st.write(f"**Productos detectados:** {len(productos)}")
+# EXTRAER DATOS
+numero_solicitud = extract_numero_solicitud(text)
+pedido_pendiente = extract_pedido_pendiente(text)
+productos = extract_products(text)
 
-    if productos:
-        for idx, p in enumerate(productos, 1):
-            st.write(f"### Producto {idx}")
-            st.write(f"**Código:** {p['codigo'] or '— vacío —'}")
-            st.write(f"**Descripción:** {p['descripcion'] or '— vacío —'}")
-            st.write(f"**Unidad:** {p['unidad'] or '— vacío —'}")
-            st.write(f"**Cantidad:** {p['cantidad'] or '— vacío —'}")
+st.subheader("📌 Datos extraídos")
+st.write("Número solicitud:", numero_solicitud or "— vacío —")
+st.write("Pedido pendiente:", pedido_pendiente or "— vacío —")
+st.write(f"Productos detectados: {len(productos)}")
 
-    # =============================
-    #  BOTÓN PARA ENVIAR
-    # =============================
+for i, p in enumerate(productos, start=1):
+    st.markdown(f"### Producto {i}")
+    st.write("Código:", p["codigo"])
+    st.write("Descripción:", p["descripcion"])
+    st.write("Unidad:", p["unidad"] or "— vacío —")
+    st.write("Cantidad:", p["cantidad"] or "— vacío —")
+    st.write("---")
 
-    if productos:
-        producto = productos[0]   # solo enviamos el primer producto
-
-        if st.button("Enviar al Formulario"):
+# BOTÓN DE ENVÍO
+if productos:
+    if st.button("📤 Enviar al Google Form"):
+        for prod in productos:
             payload = {
                 ENTRY_SOLICITUD: numero_solicitud,
                 ENTRY_PEDIDO: pedido_pendiente,
-                ENTRY_CODIGO: producto["codigo"],
-                ENTRY_DESCRIP: producto["descripcion"],
-                ENTRY_UNIDAD: producto["unidad"],
-                ENTRY_CANT: producto["cantidad"],
+                ENTRY_CODIGO: prod["codigo"],
+                ENTRY_DESCRIP: prod["descripcion"],
+                ENTRY_UNIDAD: prod["unidad"],
+                ENTRY_CANT: prod["cantidad"],
             }
 
-            response = requests.post(FORM_URL, data=payload)
+            requests.post(FORM_URL, data=payload)
 
-            if response.status_code == 200:
-                st.success("Datos enviados correctamente.")
-            else:
-                st.error("Hubo un error al enviar los datos.")
-
+        st.success("✔ Todos los productos fueron enviados correctamente.")
+else:
+    st.warning("No se detectaron productos en la imagen.")
