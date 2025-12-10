@@ -6,7 +6,7 @@ from PIL import Image
 import re
 
 # ---------------------------------------------
-# CONFIGURACIÓN GOOGLE FORM
+# CONFIGURACIÓN GOOGLE FORM (tus valores)
 # ---------------------------------------------
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
@@ -25,251 +25,285 @@ ENTRY_DOC = "entry.412830053"
 def load_reader():
     return easyocr.Reader(["es"], gpu=False)
 
-
 # ---------------------------------------------
-# EXTRACTOR DE PRODUCTOS (robusto, sin "acumulación")
-# - intenta encontrar DESCRIPCION preferiblemente "después" del código
-# - si no hay, recoge líneas "antes"
-# - devuelve lista de dicts independientes (no referencias compartidas)
+# Extraer productos (función original)
 # ---------------------------------------------
 def extract_products(text):
-    # normalizar líneas
-    raw_lines = [l.strip() for l in text.split("\n") if l.strip()]
-    lines = raw_lines[:]  # copia explícita
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
     productos = []
-    patron_codigo = re.compile(r"^\d{5,7}$")
 
-    # función auxiliar: limpiar/normalizar una línea
-    def clean_line(s):
-        return re.sub(r"\s{2,}", " ", s).strip()
+    for i, line in enumerate(lines):
 
-    for idx, ln in enumerate(lines):
-        if patron_codigo.fullmatch(ln):
-            codigo = ln.strip()
+        if re.fullmatch(r"\d{5,6}", line):
+            codigo = line
 
-            # ----------------------------
-            # Toma descripción PREFERENTE: líneas después del código (si tienen texto útil)
-            # ----------------------------
-            desc_after = []
-            j = idx + 1
-            max_after = 6  # hasta 6 líneas después
-            while j < len(lines) and max_after > 0:
-                l = lines[j]
-                # detener si aparece otro código o una etiqueta clara
-                if patron_codigo.fullmatch(l) or re.search(r"(solicitud|pedido|pendiente|cod|cantidad|cantidad:|cant|unidad)", l, re.I):
-                    break
-                # si la línea es solo números largos (doc/telefono) romper
-                if re.fullmatch(r"\d{7,12}", l):
-                    break
-                desc_after.append(l)
-                j += 1
-                max_after -= 1
-
-            desc_after = [clean_line(x) for x in desc_after if x.strip()]
-
-            # ----------------------------
-            # Si no hay descripción después, intenta antes (agregado para casos antiguos)
-            # ----------------------------
-            desc_before = []
-            k = idx - 1
-            max_before = 4
-            while k >= 0 and max_before > 0:
-                l = lines[k]
-                if patron_codigo.fullmatch(l) or re.search(r"(solicitud|pedido|pendiente|cod|cantidad|cantidad:|cant|unidad)", l, re.I):
-                    break
-                if re.fullmatch(r"\d{7,12}", l):
-                    break
-                desc_before.insert(0, l)  # insert front to preserve order
+            desc_lines = []
+            k = i - 1
+            while k >= 0 and not re.search(r"(cod|descrip|unid|cant)", lines[k], re.IGNORECASE):
+                if not re.fullmatch(r"\d{8,12}", lines[k]):
+                    desc_lines.append(lines[k])
                 k -= 1
-                max_before -= 1
-            desc_before = [clean_line(x) for x in desc_before if x.strip()]
 
-            # ----------------------------
-            # Selección: preferir after si tiene contenido, sino before
-            # ----------------------------
-            descripcion = ""
-            if desc_after:
-                descripcion = " ".join(desc_after)
-            elif desc_before:
-                descripcion = " ".join(desc_before)
-            else:
-                descripcion = ""  # quedará vacío si no hay nada
+            desc_lines.reverse()
+            descripcion = " ".join(desc_lines).strip()
 
-            descripcion = descripcion.strip()
-
-            # ----------------------------
-            # Detectar unidad (buscar cerca del código)
-            # ----------------------------
             unidad = ""
             unidad_idx = None
-            for jj in range(idx + 1, min(idx + 6, len(lines))):
-                candidate = lines[jj].lower()
-                if re.search(r"\b(fco|frasco|tab|tableta|caps?|amp|ml|mg|und|unidad)\b", candidate, re.I):
-                    unidad = lines[jj].strip()
-                    unidad_idx = jj
+            for j in range(i + 1, min(i + 6, len(lines))):
+                if re.fullmatch(r"(fco|tab|caps?|amp|ml|und)", lines[j], re.IGNORECASE):
+                    unidad = lines[j]
+                    unidad_idx = j
                     break
 
-            # ----------------------------
-            # Detectar cantidad (buscar inmediatamente después de unidad o en las próximas líneas)
-            # ----------------------------
             cantidad = ""
-            search_from = idx + 1 if unidad_idx is None else unidad_idx + 1
-            for jj in range(search_from, min(search_from + 6, len(lines))):
-                nums = re.findall(r"\b(\d{1,3})\b", lines[jj])
-                if nums:
-                    cantidad = nums[-1]
-                    break
+            if unidad_idx is not None:
+                for j in range(unidad_idx + 1, min(unidad_idx + 8, len(lines))):
+                    nums = re.findall(r"\b(\d{1,3})\b", lines[j])
+                    if nums:
+                        cantidad = nums[-1]
 
-            # crear dict independiente (no referencias compartidas)
-            prod = {
+            if not cantidad:
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    nums = re.findall(r"\b(\d{1,3})\b", lines[j])
+                    if nums:
+                        cantidad = nums[0]
+                        break
+
+            if not cantidad:
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    m = re.search(r"(\d{1,3})\D", lines[j])
+                    if m:
+                        cantidad = m.group(1)
+                        break
+
+            productos.append({
                 "codigo": codigo,
                 "descripcion": descripcion,
                 "unidad": unidad,
                 "cantidad": cantidad
-            }
-
-            productos.append(prod)
+            })
 
     return productos
 
+# ---------------------------------------------
+# Nueva función: revisar qué campos faltan
+# ---------------------------------------------
+def campos_faltantes(num_sol, num_ped, num_doc, productos):
+    faltantes = []
+
+    if not num_sol:
+        faltantes.append("num_sol")
+    if not num_ped:
+        faltantes.append("num_ped")
+    if not num_doc:
+        faltantes.append("num_doc")
+
+    # Revisar productos
+    for i, p in enumerate(productos):
+        if not p.get("codigo"):
+            faltantes.append(f"codigo_{i}")
+        if not p.get("descripcion"):
+            faltantes.append(f"descripcion_{i}")
+        if not p.get("unidad"):
+            faltantes.append(f"unidad_{i}")
+        if not p.get("cantidad"):
+            faltantes.append(f"cantidad_{i}")
+
+    return faltantes
 
 # ---------------------------------------------
-# UI y flujo principal
+# STREAMLIT UI (principal)
 # ---------------------------------------------
 st.set_page_config(page_title="OCR Pendientes", layout="centered")
-st.title("📄 OCR de Tickets de Pendientes — Versión estable")
+st.title("📄 OCR de Tickets de Pendientes")
 
-# input documento
+# Inicializar session_state para productos manuales
+if "manual_products" not in st.session_state:
+    st.session_state.manual_products = []
+
+# Campo de documento (puede ingresarlo el usuario)
 num_doc = st.text_input("Número de Documento del Usuario", value="")
 
-# subir imagen
+# Carga de imagen
 uploaded = st.file_uploader("Sube la imagen del ticket", type=["png", "jpg", "jpeg"])
 
 if not uploaded:
-    st.info("Sube una imagen para procesar.")
+    st.info("Por favor sube una imagen para procesar.")
     st.stop()
 
 image = Image.open(uploaded).convert("RGB")
 st.image(image, caption="Imagen cargada", use_column_width=True)
 
-# ejecutar OCR
+# OCR
 reader = load_reader()
 with st.spinner("Ejecutando OCR..."):
     img_np = np.array(image)
+    # readtext con detail=0 devuelve lista de strings
     lines = reader.readtext(img_np, detail=0, paragraph=False)
 
 ocr_text = "\n".join(lines)
+#*****************************************************************
+#st.subheader("📝 Texto detectado (OCR)")
+#st.code(ocr_text)
 
-# mostrar debug de líneas (útil para ajustar)
-st.subheader("Texto detectado (líneas OCR)")
-for i, L in enumerate(lines, start=1):
-    st.write(f"{i:02d} | {L}")
-
-# extraer productos con la función robusta
+# ---------------------------------------------
+# Extracción automática y valores clave
+# ---------------------------------------------
 productos = extract_products(ocr_text)
 
-# extraer solicitud/pedido
 m1 = re.search(r"solicitud\s*(\d{4,12})", ocr_text, re.IGNORECASE)
 num_sol = m1.group(1) if m1 else ""
+
 m2 = re.search(r"pendiente\s*(\d{4,12})", ocr_text, re.IGNORECASE)
 num_ped = m2.group(1) if m2 else ""
 
-st.subheader("Datos iniciales detectados")
-st.write("Número solicitud:", num_sol or "— vacío —")
-st.write("Pedido pendiente:", num_ped or "— vacío —")
-st.write("Documento usuario (input):", num_doc or "— vacío —")
-st.write(f"Productos detectados: {len(productos)}")
+# ---------------------------------------------
+# Lógica para activar modo manual (Opción A)
+# ---------------------------------------------
+# Si no hay productos detectados pero hay otras líneas, permitir entrada manual también.
+ocr_failed_basic = (len(lines) == 0) or (len(productos) == 0)
 
-# Si no detectó productos, mostrar formulario para agregar
-if not productos:
-    st.warning("No se detectaron productos. Agrega manualmente.")
-    with st.form("add_manual_single", clear_on_submit=True):
-        c = st.text_input("Código", key="manual_cod")
-        d = st.text_input("Descripción", key="manual_desc")
-        u = st.text_input("Unidad", key="manual_und")
-        q = st.text_input("Cantidad", key="manual_cant")
-        add = st.form_submit_button("➕ Agregar producto manual")
-    if add:
-        if c.strip() and d.strip():
-            productos.append({"codigo": c.strip(), "descripcion": d.strip(), "unidad": u.strip(), "cantidad": q.strip()})
-            st.success("Producto agregado manualmente.")
-        else:
-            st.error("Código y descripción son obligatorios para agregar manualmente.")
+# Revisar campos faltantes exactos (incluso si hay algo detectado)
+faltantes = campos_faltantes(num_sol, num_ped, num_doc, productos)
 
-# Mostrar productos con keys únicos y opción eliminar
-st.subheader("Revisa y corrige los productos detectados")
-productos_final = []
-for i, p in enumerate(productos):
-    st.markdown(f"### Producto {i+1}")
-    # columnas: datos y controles
-    cols = st.columns([4, 1])
-    with cols[0]:
-        codigo = st.text_input(f"Código_{i}", value=p.get("codigo", ""), key=f"codigo_{i}")
-        descripcion = st.text_area(f"Descripcion_{i}", value=p.get("descripcion", ""), key=f"desc_{i}", height=80)
-        unidad = st.text_input(f"Unidad_{i}", value=p.get("unidad", ""), key=f"und_{i}")
-        cantidad = st.text_input(f"Cantidad_{i}", value=p.get("cantidad", ""), key=f"cant_{i}")
-    with cols[1]:
-        eliminar = st.checkbox("❌ Quitar", key=f"del_{i}")
-    if not eliminar:
-        productos_final.append({
-            "codigo": codigo.strip(),
-            "descripcion": descripcion.strip(),
-            "unidad": unidad.strip(),
-            "cantidad": cantidad.strip()
-        })
+# Si hay faltantes o el OCR básico falló, habilitar edición/entrada manual (Opción A)
+if faltantes:
+    st.warning("⚠️ Algunos campos no fueron detectados. Completa lo que falta antes de enviar.")
 
-# opción para agregar más productos en lote
-st.markdown("---")
-with st.form("add_batch", clear_on_submit=True):
-    new_cod = st.text_input("Nuevo Código", key="newcod")
-    new_desc = st.text_input("Nueva Descripción", key="newdesc")
-    new_und = st.text_input("Nueva Unidad", key="newund")
-    new_cant = st.text_input("Nueva Cantidad", key="newcant")
-    addb = st.form_submit_button("➕ Agregar producto extra")
-if addb:
-    if new_cod.strip() and new_desc.strip():
-        productos_final.append({
-            "codigo": new_cod.strip(),
-            "descripcion": new_desc.strip(),
-            "unidad": new_und.strip(),
-            "cantidad": new_cant.strip()
-        })
-        st.success("Producto extra agregado.")
+    # Mostrar campos principales con lo que se detectó (si algo)
+    num_sol = st.text_input("Número de Solicitud", value=num_sol)
+    num_ped = st.text_input("Pedido Pendiente", value=num_ped)
+    num_doc = st.text_input("Número de Documento del Usuario", value=num_doc)
+
+    # Si no hay productos detectados inicialmente, permitir agregar manualmente múltiples
+    if not productos:
+        st.subheader("📝 Agregar productos manualmente")
+        with st.form("manual_product_form", clear_on_submit=True):
+            codigo_manual = st.text_input("Código del producto")
+            descripcion_manual = st.text_input("Descripción del producto")
+            unidad_manual = st.text_input("Unidad (ej: TAB, FCO, AMP, ML, UND)")
+            cantidad_manual = st.text_input("Cantidad")
+            add_clicked = st.form_submit_button("➕ Agregar producto")
+
+        if add_clicked:
+            if codigo_manual.strip() and descripcion_manual.strip() and unidad_manual.strip() and cantidad_manual.strip():
+                st.session_state.manual_products.append({
+                    "codigo": codigo_manual.strip(),
+                    "descripcion": descripcion_manual.strip(),
+                    "unidad": unidad_manual.strip(),
+                    "cantidad": cantidad_manual.strip()
+                })
+                st.success("Producto agregado a la lista manual.")
+            else:
+                st.error("Por favor completa todos los campos del producto antes de agregar.")
+
+        # Mostrar lista manual si existe
+        if st.session_state.manual_products:
+            st.markdown("**Productos manuales agregados:**")
+            for idx, p in enumerate(st.session_state.manual_products, start=1):
+                st.write(f"{idx}. Código: {p['codigo']} | Desc: {p['descripcion']} | Unidad: {p['unidad']} | Cantidad: {p['cantidad']}")
+
+        # Si hay productos manuales en sesión, úsalos
+        if st.session_state.manual_products:
+            productos = st.session_state.manual_products
+
     else:
-        st.error("Código y descripción son obligatorios para agregar.")
+        # Hay productos detectados: permitir editar solo los campos que falten (se muestran todos para comodidad)
+        st.subheader("✏ Revisa y completa los productos detectados")
+        nuevos_productos = []
+        for i, p in enumerate(productos):
+            st.markdown(f"### Producto {i+1}")
 
-# Validaciones finales
-if not num_doc:
-    st.warning("Falta número de documento del usuario.")
-if not num_sol:
-    st.warning("Falta número de solicitud detectado (completa si lo sabes).")
-if not num_ped:
-    st.warning("Falta número de pedido pendiente detectado (completa si lo sabes).")
+            # Si algún campo estaba vacío, el input quedará vacío; si tenía valor, se prellena
+            codigo_val = p.get("codigo", "") or ""
+            descripcion_val = p.get("descripcion", "") or ""
+            unidad_val = p.get("unidad", "") or ""
+            cantidad_val = p.get("cantidad", "") or ""
 
+            codigo_in = st.text_input(f"Código Producto {i+1}", value=codigo_val, key=f"cod_{i}")
+            descripcion_in = st.text_input(f"Descripción Producto {i+1}", value=descripcion_val, key=f"desc_{i}")
+            unidad_in = st.text_input(f"Unidad Producto {i+1}", value=unidad_val, key=f"und_{i}")
+            cantidad_in = st.text_input(f"Cantidad Producto {i+1}", value=cantidad_val, key=f"cant_{i}")
+
+            nuevos_productos.append({
+                "codigo": codigo_in.strip(),
+                "descripcion": descripcion_in.strip(),
+                "unidad": unidad_in.strip(),
+                "cantidad": cantidad_in.strip()
+            })
+
+        # Permitir añadir productos adicionales manuales si hace falta
+        st.markdown("**¿Falta algún producto? Añádelo abajo:**")
+        with st.form("agregar_extra", clear_on_submit=True):
+            extra_cod = st.text_input("Código (nuevo)")
+            extra_desc = st.text_input("Descripción (nuevo)")
+            extra_und = st.text_input("Unidad (nuevo)")
+            extra_cant = st.text_input("Cantidad (nuevo)")
+            add_extra = st.form_submit_button("➕ Agregar producto extra")
+        if add_extra:
+            if extra_cod.strip() and extra_desc.strip() and extra_und.strip() and extra_cant.strip():
+                nuevos_productos.append({
+                    "codigo": extra_cod.strip(),
+                    "descripcion": extra_desc.strip(),
+                    "unidad": extra_und.strip(),
+                    "cantidad": extra_cant.strip()
+                })
+                st.success("Producto extra agregado.")
+            else:
+                st.error("Completa todos los campos del producto extra para agregar.")
+
+        productos = nuevos_productos
+
+# Si no hay faltantes y OCR produjo productos, mostramos lo detectado (modo normal)
+if not campos_faltantes(num_sol, num_ped, num_doc, productos):
+    st.subheader("📌 Datos extraídos automáticamente")
+    st.write("Número solicitud:", num_sol or "— vacío —")
+    st.write("Pedido pendiente:", num_ped or "— vacío —")
+    st.write("Documento usuario:", num_doc or "— vacío —")
+    st.write(f"Productos detectados: {len(productos)}")
+
+    for i, p in enumerate(productos, start=1):
+        st.markdown(f"### Producto {i}")
+        st.write("Código:", p["codigo"] or "— vacío —")
+        st.write("Descripción:", p["descripcion"] or "— vacío —")
+        st.write("Unidad:", p["unidad"] or "— vacío —")
+        st.write("Cantidad:", p["cantidad"] or "— vacío —")
+        st.write("---")
+
+# ---------------------------------------------
+# Validación final: asegurar que no falte nada antes de enviar
+# ---------------------------------------------
+faltantes_final = campos_faltantes(num_sol, num_ped, num_doc, productos)
+if faltantes_final:
+    st.error("⚠ Aún faltan campos por completar. Revisa el formulario y completa los campos vacíos.")
+    st.stop()
+
+# ---------------------------------------------
+# Envío al Google Form (una fila por producto)
+# ---------------------------------------------
 if st.button("📤 Enviar productos al Google Sheet"):
-    # comprobaciones
-    if not num_doc or not num_sol or not num_ped:
-        st.error("Completa Documento / Solicitud / Pedido antes de enviar.")
-    elif not productos_final:
-        st.error("No hay productos para enviar.")
-    else:
-        enviados = 0
-        errores = 0
-        for p in productos_final:
-            payload = {
-                ENTRY_SOLICITUD: num_sol,
-                ENTRY_PEDIDO: num_ped,
-                ENTRY_CODIGO: p["codigo"],
-                ENTRY_DESCRIP: p["descripcion"],
-                ENTRY_UNIDAD: p["unidad"],
-                ENTRY_CANT: p["cantidad"],
-                ENTRY_DOC: num_doc
-            }
-            try:
-                requests.post(FORM_URL, data=payload, timeout=10)
-                enviados += 1
-            except Exception as e:
-                errores += 1
-                st.write(f"Error enviando {p.get('codigo','')}: {e}")
-        st.success(f"Se enviaron {enviados} productos. Errores: {errores}")
+    enviados = 0
+    errores = 0
+    for p in productos:
+        payload = {
+            ENTRY_SOLICITUD: num_sol,
+            ENTRY_PEDIDO: num_ped,
+            ENTRY_CODIGO: p["codigo"],
+            ENTRY_DESCRIP: p["descripcion"],
+            ENTRY_UNIDAD: p["unidad"],
+            ENTRY_CANT: p["cantidad"],
+            ENTRY_DOC: num_doc
+        }
 
+        try:
+            requests.post(FORM_URL, data=payload, timeout=10)
+            enviados += 1
+        except Exception as e:
+            errores += 1
+            st.write(f"Error enviando producto {p.get('codigo','')}: {e}")
+
+    # limpiar productos manuales si los hubo y se enviaron
+    if enviados > 0 and st.session_state.get("manual_products"):
+        st.session_state.manual_products = []
+
+    st.success(f"Se enviaron {enviados} productos correctamente. Errores: {errores}")
