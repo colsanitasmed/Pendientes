@@ -6,7 +6,7 @@ from PIL import Image
 import re
 
 # ---------------------------------------------
-# CONFIGURACIÓN GOOGLE FORM
+# CONFIGURACIÓN GOOGLE FORM (tus valores)
 # ---------------------------------------------
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMsMmOaUhwpD9HQCuKf0Y4Y6oesiUO9GphNb5WMz3ItKKPjg/formResponse"
 
@@ -26,7 +26,7 @@ def load_reader():
     return easyocr.Reader(["es"], gpu=False)
 
 # ---------------------------------------------
-# Extraer productos
+# Extraer productos (tu función original)
 # ---------------------------------------------
 def extract_products(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -91,7 +91,7 @@ def extract_products(text):
 st.set_page_config(page_title="OCR Pendientes", layout="centered")
 st.title("📄 OCR de Tickets de Pendientes")
 
-# Campo de documento
+# Campo de documento (usuario lo ingresa)
 num_doc = st.text_input("Número de Documento del Usuario")
 
 # Carga de imagen
@@ -112,7 +112,7 @@ with st.spinner("Ejecutando OCR..."):
 
 ocr_text = "\n".join(lines)
 
-st.subheader("📝 Texto detectado")
+st.subheader("📝 Texto detectado (OCR)")
 st.code(ocr_text)
 
 # ---------------------------------------------
@@ -127,24 +127,72 @@ m2 = re.search(r"pendiente\s*(\d{6,12})", ocr_text, re.IGNORECASE)
 num_ped = m2.group(1) if m2 else ""
 
 # ---------------------------------------------
-# MOSTRAR RESULTADOS
+# Si OCR falla o no detecta productos -> formulario manual
 # ---------------------------------------------
-st.subheader("📌 Datos extraídos")
-st.write("Número solicitud:", num_sol or "— vacío —")
-st.write("Pedido pendiente:", num_ped or "— vacío —")
-st.write("Documento usuario:", num_doc or "— vacío —")
-st.write(f"Productos detectados: {len(productos)}")
+# Inicializar session_state para productos manuales (lista)
+if "manual_products" not in st.session_state:
+    st.session_state.manual_products = []
 
-for i, p in enumerate(productos, start=1):
-    st.markdown(f"### Producto {i}")
-    st.write("Código:", p["codigo"] or "— vacío —")
-    st.write("Descripción:", p["descripcion"] or "— vacío —")
-    st.write("Unidad:", p["unidad"] or "— vacío —")
-    st.write("Cantidad:", p["cantidad"] or "— vacío —")
-    st.write("---")
+# Determinar si consideramos que OCR falló
+ocr_failed = (len(lines) == 0) or (len(productos) == 0)
+
+if ocr_failed:
+    st.warning("⚠️ No fue posible extraer productos automáticamente. Por favor ingrésalos manualmente.")
+
+    # Permitir al usuario editar/confirmar num_sol, num_ped, num_doc
+    num_sol = st.text_input("Número de Solicitud (manual)", value=num_sol)
+    num_ped = st.text_input("Pedido Pendiente (manual)", value=num_ped)
+    num_doc = st.text_input("Número de Documento del Usuario (manual)", value=num_doc)
+
+    st.subheader("📝 Agregar productos manualmente")
+    with st.form("manual_product_form", clear_on_submit=True):
+        codigo_manual = st.text_input("Código del producto")
+        descripcion_manual = st.text_input("Descripción del producto")
+        unidad_manual = st.text_input("Unidad (ej: TAB, FCO, AMP, ML, UND)")
+        cantidad_manual = st.text_input("Cantidad")
+
+        add_clicked = st.form_submit_button("➕ Agregar producto")
+
+    if add_clicked:
+        # validar campos mínimos
+        if codigo_manual.strip() and descripcion_manual.strip() and unidad_manual.strip() and cantidad_manual.strip():
+            st.session_state.manual_products.append({
+                "codigo": codigo_manual.strip(),
+                "descripcion": descripcion_manual.strip(),
+                "unidad": unidad_manual.strip(),
+                "cantidad": cantidad_manual.strip()
+            })
+            st.success("Producto agregado a la lista manual.")
+        else:
+            st.error("Por favor completa todos los campos del producto antes de agregar.")
+
+    # Mostrar lista manual
+    if st.session_state.manual_products:
+        st.markdown("**Productos manuales agregados:**")
+        for idx, p in enumerate(st.session_state.manual_products, start=1):
+            st.write(f"{idx}. Código: {p['codigo']} | Desc: {p['descripcion']} | Unidad: {p['unidad']} | Cantidad: {p['cantidad']}")
+
+    # Si ya hay productos manuales, reemplazamos `productos` por ellos para envío
+    if st.session_state.manual_products:
+        productos = st.session_state.manual_products
+else:
+    # OCR tuvo éxito en detectar productos: mostrar resultados detectados
+    st.subheader("📌 Datos extraídos automáticamente")
+    st.write("Número solicitud:", num_sol or "— vacío —")
+    st.write("Pedido pendiente:", num_ped or "— vacío —")
+    st.write("Documento usuario:", num_doc or "— vacío —")
+    st.write(f"Productos detectados: {len(productos)}")
+
+    for i, p in enumerate(productos, start=1):
+        st.markdown(f"### Producto {i}")
+        st.write("Código:", p["codigo"] or "— vacío —")
+        st.write("Descripción:", p["descripcion"] or "— vacío —")
+        st.write("Unidad:", p["unidad"] or "— vacío —")
+        st.write("Cantidad:", p["cantidad"] or "— vacío —")
+        st.write("---")
 
 # ---------------------------------------------
-# VALIDACIÓN DE CAMPOS VACÍOS
+# VALIDACIÓN DE CAMPOS VACÍOS (antes de enviar)
 # ---------------------------------------------
 campos_invalidos = (
     not num_doc or
@@ -155,30 +203,35 @@ campos_invalidos = (
 )
 
 if campos_invalidos:
-    st.error("⚠️ El ticket no es legible. Por favor cargue un ticket claro para procesar los datos.")
-    st.stop()
+    st.error("⚠️ Faltan datos obligatorios para enviar. Si usaste la entrada manual, asegúrate de agregar al menos un producto completo.")
+else:
+    # ---------------------------------------------
+    # ENVÍO AL GOOGLE FORM (una fila por producto)
+    # ---------------------------------------------
+    if st.button("📤 Enviar productos al Google Sheet"):
+        enviados = 0
+        errores = 0
+        for p in productos:
+            payload = {
+                ENTRY_SOLICITUD: num_sol,
+                ENTRY_PEDIDO: num_ped,
+                ENTRY_CODIGO: p["codigo"],
+                ENTRY_DESCRIP: p["descripcion"],
+                ENTRY_UNIDAD: p["unidad"],
+                ENTRY_CANT: p["cantidad"],
+                ENTRY_DOC: num_doc
+            }
 
-# ---------------------------------------------
-# ENVÍO
-# ---------------------------------------------
-if st.button("📤 Enviar productos al Google Sheet"):
+            try:
+                resp = requests.post(FORM_URL, data=payload, timeout=10)
+                # Google Forms típicamente devuelve 200 o 0 (redirección). Solo asumimos éxito si no lanza excepción.
+                enviados += 1
+            except Exception as e:
+                errores += 1
+                st.write(f"Error enviando producto {p.get('codigo','')}: {e}")
 
-    enviados = 0
-    for p in productos:
-        payload = {
-            ENTRY_SOLICITUD: num_sol,
-            ENTRY_PEDIDO: num_ped,
-            ENTRY_CODIGO: p["codigo"],
-            ENTRY_DESCRIP: p["descripcion"],
-            ENTRY_UNIDAD: p["unidad"],
-            ENTRY_CANT: p["cantidad"],
-            ENTRY_DOC: num_doc
-        }
+        # limpiar productos manuales si los hubo y se enviaron
+        if enviados > 0 and st.session_state.get("manual_products"):
+            st.session_state.manual_products = []
 
-        try:
-            requests.post(FORM_URL, data=payload, timeout=10)
-            enviados += 1
-        except:
-            pass
-
-    st.success(f"Se enviaron {enviados} productos correctamente.")
+        st.success(f"Se enviaron {enviados} productos correctamente. Errores: {errores}")
