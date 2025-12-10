@@ -142,9 +142,9 @@ with st.spinner("Ejecutando OCR..."):
     lines = reader.readtext(img_np, detail=0, paragraph=False)
 
 ocr_text = "\n".join(lines)
-
-st.subheader("📝 Texto detectado (OCR)")
-st.code(ocr_text)
+#*****************************************************************
+#st.subheader("📝 Texto detectado (OCR)")
+#st.code(ocr_text)
 
 # ---------------------------------------------
 # Extracción automática y valores clave
