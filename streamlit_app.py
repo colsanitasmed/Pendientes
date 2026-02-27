@@ -65,52 +65,84 @@ def process_ocr_results(results):
 
 def extract_products_spatial(rows):
     productos = []
+    current_product = None
+    buffer_rows = [] # Filas encontradas antes del primer código
     
     for row in rows:
         row_text = " ".join([item[1] for item in row])
-        
-        # Buscar el código (5-6 dígitos)
         codigo_match = re.search(r"\b(\d{5,6})\b", row_text)
+        
         if codigo_match:
+            # Si ya teníamos un producto, lo guardamos
+            if current_product:
+                productos.append(current_product)
+            
+            # Iniciamos uno nuevo
             codigo = codigo_match.group(1)
-            
-            # Intentar identificar otros campos en la misma fila
-            # La descripción suele estar a la izquierda o derecha del código
-            # La cantidad suele ser un número pequeño (1-3 dígitos)
-            
-            items_text = [item[1] for item in row]
-            
-            # Buscamos la cantidad: usualmente al final de la fila o después de la unidad
-            cantidad = ""
-            for text in reversed(items_text):
-                nums = re.findall(r"\b(\d{1,3})\b", text)
-                if nums and text != codigo:
-                    cantidad = nums[-1]
-                    break
-            
-            # Buscamos la unidad
-            unidad = ""
-            for text in items_text:
-                if re.search(r"(fco|tab|caps?|amp|ml|und|unid)", text, re.IGNORECASE):
-                    unidad = text
-                    break
-            
-            # La descripción es todo lo que no es código, cantidad o unidad
-            desc_parts = []
-            for text in items_text:
-                if text != codigo and text != cantidad and text != unidad:
-                    # Evitar ruidos comunes
-                    if len(text) > 2:
-                        desc_parts.append(text)
-            
-            descripcion = " ".join(desc_parts).strip()
-
-            productos.append({
+            current_product = {
                 "codigo": codigo,
-                "descripcion": descripcion,
-                "unidad": unidad,
-                "cantidad": cantidad
-            })
+                "descripcion_parts": [],
+                "unidad": "",
+                "cantidad": ""
+            }
+            # Si había un buffer de filas "huérfanas", se las asignamos a este primer producto
+            if buffer_rows and len(productos) == 0:
+                for b_row in buffer_rows:
+                    for item in b_row:
+                        current_product["descripcion_parts"].append(item[1])
+                buffer_rows = []
+                
+            items_text = [item[1] for item in row]
+        else:
+            if current_product:
+                items_text = [item[1] for item in row]
+            else:
+                # Guardar en el buffer por si el código aparece en la siguiente línea
+                # Solo si parece texto de producto y no encabezados generales
+                if not re.search(r"(solic|pedi|atend|detalle|cruz)", row_text, re.IGNORECASE):
+                    buffer_rows.append(row)
+                continue
+
+        # Extraer Cantidad
+        if not current_product["cantidad"]:
+            for text in reversed(items_text):
+                if text.isdigit() and len(text) < 4:
+                    current_product["cantidad"] = text
+                    break
+                m_qty = re.search(r"^(\d{1,3})", text)
+                if m_qty:
+                    current_product["cantidad"] = m_qty.group(1)
+                    break
+
+        # Extraer Unidad
+        if not current_product["unidad"]:
+            for text in items_text:
+                if re.search(r"\b(fco|fcco|tab|tbs|caps?|amp|ml|und|unid|caj|inh|sol|rec)\b", text, re.IGNORECASE):
+                    current_product["unidad"] = text
+                    break
+                
+        # Descripción
+        for text in items_text:
+            if text == current_product["codigo"]: continue
+            
+            # Cantidad y Unidad (check case-insensitive)
+            is_qty = current_product["cantidad"] and text.lower().startswith(current_product["cantidad"].lower()) and len(text) <= len(current_product["cantidad"]) + 2
+            is_unit = current_product["unidad"] and text.lower() == current_product["unidad"].lower()
+            
+            if not is_qty and not is_unit:
+                if len(text) > 2 and not re.search(r"^(cod|desc|unid|cant|detalle)", text, re.IGNORECASE):
+                    current_product["descripcion_parts"].append(text)
+
+    if current_product:
+        productos.append(current_product)
+
+    for p in productos:
+        clean_desc = []
+        for word in p["descripcion_parts"]:
+            if not clean_desc or word.lower() != clean_desc[-1].lower():
+                clean_desc.append(word)
+        p["descripcion"] = " ".join(clean_desc).strip()
+        del p["descripcion_parts"]
             
     return productos
 
