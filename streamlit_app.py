@@ -149,10 +149,12 @@ with st.expander("Ver texto detectado (Raw)"):
     st.code(full_text)
 
 # Extracción de datos maestros (Solicitud y Pedido)
-m1 = re.search(r"solicitud\s*[:\s]*(\d{6,12})", full_text, re.IGNORECASE)
+# Buscamos variaciones como "Solicitud:", "No. Solicitud", "Sol:", "Nro Solicitud", etc.
+m1 = re.search(r"(?:solicitud|sol|nro\s*sol|num\s*sol)\s*[:\s#]*(\d{6,12})", full_text, re.IGNORECASE)
 num_sol = m1.group(1) if m1 else ""
 
-m2 = re.search(r"pendiente\s*[:\s]*(\d{6,12})", full_text, re.IGNORECASE)
+# Buscamos variaciones de "Pedido" o "Pendiente"
+m2 = re.search(r"(?:pendiente|pedido|ped|nro\s*ped)\s*[:\s#]*(\d{6,12})", full_text, re.IGNORECASE)
 num_ped = m2.group(1) if m2 else ""
 
 # Extracción de productos
